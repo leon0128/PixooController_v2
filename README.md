@@ -38,6 +38,9 @@ Everything runs in containers.
     ├── web/               # Next.js + shadcn/ui
     │   └── Dockerfile
     └── api/               # NestJS + TypeORM
+        ├── src/scenes/entities/
+        ├── src/schedules/entities/
+        ├── src/database/         # DataSource + migrations
         └── Dockerfile
 ```
 
@@ -106,15 +109,15 @@ erDiagram
 
     SceneImage {
         int id PK
-        int scene_id FK
+        int scene_id FK "UNIQUE"
         int pic_speed "background image loop interval (Draw/SendHttpGif.PicSpeed)"
     }
 
     SceneImageDetail {
         int id PK
         int scene_image_id FK
-        int order "loop order (PicOffset)"
-        string image_data "64x64 image data, Base64-encoded (PicData)"
+        int frame_index "loop order (PicOffset); UNIQUE with scene_image_id"
+        text image_data "64x64 image data, Base64-encoded (PicData)"
     }
 
     SceneElement {
@@ -135,11 +138,25 @@ erDiagram
 
     Schedule {
         int id PK
-        int day_of_week "0-6"
-        int slot "0-143 (10-minute increments, 144 slots per day)"
+        smallint day_of_week "0-6; UNIQUE with slot"
+        smallint slot "0-143 (10-minute increments, 144 slots per day)"
         int scene_id FK
     }
 ```
+
+Every table also carries `created_at` / `updated_at`. Columns are `snake_case` in the database and `camelCase` on the TypeScript entities, bridged by TypeORM's `SnakeNamingStrategy`.
+
+`frame_index` is named that way rather than `order` because `ORDER` is a reserved SQL word and would need quoting in every hand-written query.
+
+Constraints enforced at the database level:
+
+| Constraint | Table |
+| --- | --- |
+| `UNIQUE (day_of_week, slot)` — one scene per slot | `schedules` |
+| `CHECK (day_of_week BETWEEN 0 AND 6)`, `CHECK (slot BETWEEN 0 AND 143)` | `schedules` |
+| `UNIQUE (scene_image_id, frame_index)` — no duplicate loop positions | `scene_image_details` |
+| `UNIQUE (scene_id)` — at most one image config per scene | `scene_images` |
+| `ON DELETE CASCADE` from `scenes` — deleting a scene removes its image, frames, elements and schedules | all |
 
 - There is no `Device` table (as noted above, the device is discovered on the LAN right before every send instead)
 - `Scene` itself carries no image-related fields. Background image loop settings live in `SceneImage` (at most one per scene — a scene is allowed to have no background image at all), and each individual frame lives in `SceneImageDetail`. Frame data is stored as a Base64 string (the same format `PicData` uses on the wire), not as raw bytes, since it can be forwarded to the device as-is
@@ -162,8 +179,9 @@ erDiagram
 - [x] **Phase 1: Docker foundation**
   - [x] Scaffold the Next.js (+ shadcn/ui) and NestJS (+ TypeORM) apps under `apps/`
   - [x] `docker-compose.yml` (web / api / db) and per-app Dockerfiles
-- [ ] **Phase 2: DB schema & migrations**
-  - Scene / SceneImage / SceneImageDetail / SceneElement / Schedule
+- [x] **Phase 2: DB schema & migrations**
+  - [x] Scene / SceneImage / SceneImageDetail / SceneElement / Schedule entities
+  - [x] Initial migration, applied and verified against the running database
 - [ ] **Phase 3: NestJS API implementation**
   - Scene CRUD, image upload, Schedule CRUD
 - [ ] **Phase 4: Pixoo64 integration module**
@@ -211,13 +229,19 @@ docker compose up -d --build --renew-anon-volumes api
 
 ### Database migrations
 
-TypeORM runs with `synchronize: false`, so the schema is only ever changed through migrations. Run them inside the container:
+TypeORM runs with `synchronize: false`, so the schema only ever changes through migrations. Run them inside the container, where `DATABASE_URL` already points at `db`:
 
 ```bash
-docker compose exec api npx typeorm migration:run -d dist/data-source
+docker compose exec api npm run migration:run
 ```
 
-Migration setup lands in Phase 2, together with the entity definitions.
+After editing an entity, generate the migration by diffing the entities against the live database, then apply it:
+
+```bash
+docker compose exec api npm run migration:generate -- src/database/migrations/YourChange
+```
+
+`migration:revert` rolls back the most recent migration and `migration:show` lists what has been applied. Entities live under `src/<feature>/entities/`, migrations under `src/database/migrations/`.
 
 ### Networking note
 

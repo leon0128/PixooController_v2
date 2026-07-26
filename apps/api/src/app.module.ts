@@ -1,20 +1,18 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { dataSourceOptions } from './database/data-source';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
+      useFactory: (config: ConfigService): TypeOrmModuleOptions => ({
+        ...dataSourceOptions,
         url: config.getOrThrow<string>('DATABASE_URL'),
-        autoLoadEntities: true,
-        // Schema changes go through migrations (added in Phase 2), never auto-sync.
-        synchronize: false,
       }),
     }),
   ],
