@@ -23,9 +23,23 @@ Everything runs in containers.
 
 | Layer | Technology |
 | --- | --- |
-| Frontend | Next.js + shadcn/ui |
-| Backend | NestJS |
-| Database | PostgreSQL |
+| Frontend | Next.js 16 + shadcn/ui (Tailwind v4) |
+| Backend | NestJS 11 |
+| ORM | TypeORM 0.3 |
+| Database | PostgreSQL 17 |
+
+## Project Structure
+
+```
+.
+├── docker-compose.yml     # web / api / db
+├── .env.example           # compose settings (credentials, host ports)
+└── apps/
+    ├── web/               # Next.js + shadcn/ui
+    │   └── Dockerfile
+    └── api/               # NestJS + TypeORM
+        └── Dockerfile
+```
 
 ## Architecture
 
@@ -34,7 +48,7 @@ Everything runs in containers.
 The Pixoo64 handles displaying the date, day of week, time, and temperature, as well as looping through multiple background images, **natively on the device itself**. Because of this, the backend only needs to do the following:
 
 1. Once it determines which scene should be active, build the corresponding Pixoo64 Control API command(s) from that scene's configuration (background images and each element's position/color/font)
-2. Send the command(s) to the Pixoo64
+2. Clear whatever the previous scene left on the device (`Draw/ClearHttpText`, `Draw/ResetHttpGifId`), then send the new scene's command(s) to the Pixoo64
 
 After a single send, the device continues to advance the clock, refresh the temperature, and loop the background images on its own. There is **no need for the backend to continuously re-render and re-send frames**. The only thing the backend does proactively is evaluate the schedule every 10 minutes and send a command when needed.
 
@@ -51,46 +65,56 @@ sequenceDiagram
     Scheduler->>Scheduler: Resolve the active scene from the current day of week and time slot
     Scheduler->>Divoom: FindDevice (discover the device on the same LAN)
     Divoom-->>Scheduler: DevicePrivateIP
-    Scheduler->>Pixoo: POST /post (Image / Date / CurrentTime / DayOfWeek / Temperature)
+    Scheduler->>Pixoo: POST /post (Draw/SendHttpGif, Draw/SendHttpItemList)
     Pixoo-->>Scheduler: { error_code: 0 }
     Note over Pixoo: From here on, the Pixoo64 autonomously handles clock updates, image looping, and temperature refresh
 ```
 
 ### Building Commands
 
-Scene settings are mapped onto the Pixoo64 Control API's `CommandList` as follows.
+The main commands have been verified against the real device with Postman. Scene settings are mapped onto the Pixoo64 Control API as follows.
 
-| Scene setting | Corresponding Command |
+| Scene setting | Command | Notes |
+| --- | --- | --- |
+| Background images (multiple, loop interval) | `Draw/SendHttpGif` | Uses `PicNum` / `PicWidth` / `PicOffset` / `PicID` / `PicSpeed` / `PicData` |
+| Date / day-of-week / time / temperature display | `Draw/SendHttpItemList` | All four element types share this single command; an `ItemList` entry's numeric `type` field is what distinguishes them |
+
+`ItemList.type` values confirmed via testing:
+
+| `SceneElement.type` | Pixoo `type` code(s) |
 | --- | --- |
-| Background images (multiple, loop interval) | `Image` (`PicNum` / `PicSpeed` / `PicData`, etc.) |
-| Date display | `Date` |
-| Day-of-week display | `DayOfWeek` |
-| Time display | `CurrentTime` |
-| Temperature display | `Temperature` |
+| `time` | `5` |
+| `day_of_week` | `14` |
+| `temperature` | `17` |
+| `date` | expands into three `ItemList` entries: `9` (month), `22` (separator), `8` (day) |
 
-Each element's position, color, and font are mapped to `ItemList` fields such as `x` / `y` / `font` / `color` / `align`.
-
-> **To be confirmed**: the exact encoding used for `PicData` (the Base64 bitmap format for images) needs to be verified against the real device.
+Each element's position, color, and font are mapped to `ItemList` fields such as `x` / `y` / `font` / `color` / `align`. `PicData` and `ItemList[].TextString` values themselves are opaque payloads (Base64 bitmap / device-internal placeholder text respectively) — the actual bitmap encoding is produced by the app's own image encoder when building each request.
 
 ## Data Model (Overview)
 
 ```mermaid
 erDiagram
-    Scene ||--o{ SceneImage : "background images"
+    Scene ||--o| SceneImage : "background image loop settings"
+    SceneImage ||--o{ SceneImageDetail : "frames"
     Scene ||--o{ SceneElement : "display elements"
     Scene ||--o{ Schedule : "assignment"
 
     Scene {
         int id PK
         string name
-        int image_loop_speed "background image loop interval (PicSpeed)"
     }
 
     SceneImage {
         int id PK
         int scene_id FK
-        int order "loop order"
-        bytes image_data "64x64 image data"
+        int pic_speed "background image loop interval (Draw/SendHttpGif.PicSpeed)"
+    }
+
+    SceneImageDetail {
+        int id PK
+        int scene_image_id FK
+        int order "loop order (PicOffset)"
+        string image_data "64x64 image data, Base64-encoded (PicData)"
     }
 
     SceneElement {
@@ -99,8 +123,13 @@ erDiagram
         string type "date | day_of_week | time | temperature"
         int x
         int y
-        string color
+        int dir
         int font
+        int text_width "ItemList.TextWidth"
+        int text_height "ItemList.Textheight"
+        int speed
+        string color
+        int update_time
         int align
     }
 
@@ -113,17 +142,28 @@ erDiagram
 ```
 
 - There is no `Device` table (as noted above, the device is discovered on the LAN right before every send instead)
+- `Scene` itself carries no image-related fields. Background image loop settings live in `SceneImage` (at most one per scene — a scene is allowed to have no background image at all), and each individual frame lives in `SceneImageDetail`. Frame data is stored as a Base64 string (the same format `PicData` uses on the wire), not as raw bytes, since it can be forwarded to the device as-is
+
+`SceneElement` holds every `ItemList` field that is configurable per element, except the following, which are fixed and therefore not persisted:
+
+| `ItemList` field | Why it's excluded |
+| --- | --- |
+| `Command` | Always `Draw/SendHttpItemList` for every element type; not a per-scene setting |
+| `TextId` | Assigned sequentially when the request is built; not a per-scene setting |
+| `type` | Fixed per `SceneElement.type`: `time` → `5`, `day_of_week` → `14`, `temperature` → `17`; `date` expands into three fixed entries (`9` / `22` / `8`) |
+| `TextString` | The displayed content is inherently determined by the element type (the device fills in the actual date/time/temperature value itself), so free text is not used |
 
 ## Development Roadmap
 
-- [ ] **Phase 0: Finalize design**
-  - Define the mapping between scene settings and `ItemList` fields
-  - Verify the `PicData` bitmap encoding against the real device
-  - Choose an ORM (Prisma planned)
-- [ ] **Phase 1: Docker foundation**
-  - `docker-compose.yml` (web / api / db), Dockerfiles
+- [x] **Phase 0: Finalize design**
+  - [x] Define the mapping between scene settings and `ItemList` fields
+  - [x] Verify the main commands (`Draw/SendHttpGif`, `Draw/SendHttpItemList`, etc.) against the real device via Postman
+  - [x] Choose an ORM: TypeORM
+- [x] **Phase 1: Docker foundation**
+  - [x] Scaffold the Next.js (+ shadcn/ui) and NestJS (+ TypeORM) apps under `apps/`
+  - [x] `docker-compose.yml` (web / api / db) and per-app Dockerfiles
 - [ ] **Phase 2: DB schema & migrations**
-  - Scene / SceneImage / SceneElement / Schedule
+  - Scene / SceneImage / SceneImageDetail / SceneElement / Schedule
 - [ ] **Phase 3: NestJS API implementation**
   - Scene CRUD, image upload, Schedule CRUD
 - [ ] **Phase 4: Pixoo64 integration module**
@@ -138,4 +178,47 @@ erDiagram
 
 ## Setup
 
-Coming soon. Will be documented once the Docker foundation (Phase 1) is complete.
+### Prerequisites
+
+Docker with Compose v2 — either [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [OrbStack](https://orbstack.dev/).
+
+```bash
+brew install --cask docker
+```
+
+### Running
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+| Service | URL |
+| --- | --- |
+| Web | http://localhost:3000 |
+| API | http://localhost:3001 |
+| DB | `postgresql://pixoo:pixoo@localhost:5432/pixoo` |
+
+Ports and database credentials are configurable via `.env` — see `.env.example`. If a PostgreSQL is already running natively on the host, either stop it or set `DB_PORT` to a free port; only the host-side mapping changes, since within the compose network the database is always `db:5432`.
+
+All three services run in development mode with hot reload, and `apps/web` and `apps/api` are bind-mounted into their containers, so source edits apply without a rebuild. Re-run with `--build` only when dependencies or a Dockerfile change.
+
+`node_modules` lives in a container-local volume rather than being shared with the host, so the container is unaffected by a host-side `npm install` built for a different platform. Compose keeps that volume when it recreates a container, so after changing dependencies rebuild *and* renew it:
+
+```bash
+docker compose up -d --build --renew-anon-volumes api
+```
+
+### Database migrations
+
+TypeORM runs with `synchronize: false`, so the schema is only ever changed through migrations. Run them inside the container:
+
+```bash
+docker compose exec api npx typeorm migration:run -d dist/data-source
+```
+
+Migration setup lands in Phase 2, together with the entity definitions.
+
+### Networking note
+
+The `api` container needs to reach both `app.divoom-gz.com` (for `FindDevice`) and the Pixoo64's private LAN address. Outbound traffic to both should work over Docker's default bridge network without extra configuration, but this has not been exercised yet — it gets confirmed in Phase 4, when the device client is actually implemented.
