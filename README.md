@@ -158,6 +158,28 @@ Constraints enforced at the database level:
 | `UNIQUE (scene_id)` — at most one image config per scene | `scene_images` |
 | `ON DELETE CASCADE` from `scenes` — deleting a scene removes its image, frames, elements and schedules | all |
 
+### How a schedule is interpreted
+
+A `schedules` row records only where a scene **starts**. It has no end: a scene runs until the next entry on the weekly timeline, which is treated as a single loop — the slot before Sunday 00:00 is Saturday 23:50. One entry anywhere is therefore enough to cover the whole week, and playback never has a gap. An empty table simply means nothing is scheduled.
+
+## API
+
+Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/scenes`. The `NEXT_PUBLIC_API_URL` and `API_URL` variables handed to the web container already include that prefix, so the frontend appends the route directly (`` `${API_URL}/scenes` ``).
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/scenes` | All scenes, each with its elements and image frames |
+| `GET` | `/api/scenes/:id` | One scene with its elements and image frames |
+| `POST` | `/api/scenes` | Create a scene together with its elements and image frames |
+| `PUT` | `/api/scenes/:id` | Replace a scene wholesale; elements and frames absent from the body are deleted |
+| `DELETE` | `/api/scenes/:id` | Delete a scene and everything referencing it |
+| `GET` | `/api/schedules` | Every scene start marker, ordered by day then slot |
+| `PUT` | `/api/schedules` | Replace the entire weekly schedule |
+
+A scene and everything it owns is always written and read as one aggregate, in a single transaction.
+
+Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `PicData` string the device expects, so nothing is re-encoded on the way out. The API rejects any frame that does not decode to precisely 12288 bytes. Converting a PNG into that form is the browser's job; the API never handles image files. Frame order comes from the position in the `frames` array, so clients never assign indexes themselves.
+
 - There is no `Device` table (as noted above, the device is discovered on the LAN right before every send instead)
 - `Scene` itself carries no image-related fields. Background image loop settings live in `SceneImage` (at most one per scene — a scene is allowed to have no background image at all), and each individual frame lives in `SceneImageDetail`. Frame data is stored as a Base64 string (the same format `PicData` uses on the wire), not as raw bytes, since it can be forwarded to the device as-is
 
@@ -182,8 +204,10 @@ Constraints enforced at the database level:
 - [x] **Phase 2: DB schema & migrations**
   - [x] Scene / SceneImage / SceneImageDetail / SceneElement / Schedule entities
   - [x] Initial migration, applied and verified against the running database
-- [ ] **Phase 3: NestJS API implementation**
-  - Scene CRUD, image upload, Schedule CRUD
+- [x] **Phase 3: NestJS API implementation**
+  - [x] Scene aggregate CRUD (scene + elements + image loop in one operation)
+  - [x] Weekly schedule replace
+  - [x] Request validation, including `PicData` size checks
 - [ ] **Phase 4: Pixoo64 integration module**
   - Device discovery client (`FindDevice`)
   - Logic to build `CommandList` from scene settings

@@ -4,6 +4,8 @@ import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { dataSourceOptions } from './database/data-source';
+import { ScenesModule } from './scenes/scenes.module';
+import { SchedulesModule } from './schedules/schedules.module';
 
 @Module({
   imports: [
@@ -15,6 +17,8 @@ import { dataSourceOptions } from './database/data-source';
         url: config.getOrThrow<string>('DATABASE_URL'),
       }),
     }),
+    ScenesModule,
+    SchedulesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

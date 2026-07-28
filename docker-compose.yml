@@ -43,10 +43,11 @@ services:
     container_name: pixoo-web
     restart: unless-stopped
     environment:
+      # Both point at the API's /api prefix, so callers just append the route.
       # Read from the browser, so it must be a host-visible URL.
-      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-3001}
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-3001}/api
       # Read from Next.js server components, which resolve over the compose network.
-      API_URL: http://api:3001
+      API_URL: http://api:3001/api
     ports:
       - "${WEB_PORT:-3000}:3000"
     volumes:
