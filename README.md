@@ -82,14 +82,18 @@ The main commands have been verified against the real device with Postman. Scene
 | Background images (multiple, loop interval) | `Draw/SendHttpGif` | Uses `PicNum` / `PicWidth` / `PicOffset` / `PicID` / `PicSpeed` / `PicData` |
 | Date / day-of-week / time / temperature display | `Draw/SendHttpItemList` | All four element types share this single command; an `ItemList` entry's numeric `type` field is what distinguishes them |
 
-`ItemList.type` values confirmed via testing:
+`ItemList.type` values confirmed via testing, along with the placeholder `TextString` each one was verified with (the device substitutes the real value itself):
 
-| `SceneElement.type` | Pixoo `type` code(s) |
-| --- | --- |
-| `time` | `5` |
-| `day_of_week` | `14` |
-| `temperature` | `17` |
-| `date` | expands into three `ItemList` entries: `9` (month), `22` (separator), `8` (day) |
+| `SceneElement.type` | Pixoo `type` | `TextString` |
+| --- | --- | --- |
+| `time` | `5` | `Clock` |
+| `day_of_week` | `14` | `Week` |
+| `temperature` | `17` | `Temperature` |
+| `date_month` | `9` | `Month` |
+| `date_separator` | `22` | `:` |
+| `date_day` | `8` | `Date` |
+
+The date is three separate element types rather than one, because the device draws the month, the separator and the day as independent `ItemList` entries — each needs its own coordinates and size.
 
 Each element's position, color, and font are mapped to `ItemList` fields such as `x` / `y` / `font` / `color` / `align`. `PicData` and `ItemList[].TextString` values themselves are opaque payloads (Base64 bitmap / device-internal placeholder text respectively) — the actual bitmap encoding is produced by the app's own image encoder when building each request.
 
@@ -173,10 +177,14 @@ Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/s
 | `POST` | `/api/scenes` | Create a scene together with its elements and image frames |
 | `PUT` | `/api/scenes/:id` | Replace a scene wholesale; elements and frames absent from the body are deleted |
 | `DELETE` | `/api/scenes/:id` | Delete a scene and everything referencing it |
+| `POST` | `/api/scenes/:id/push` | Play a stored scene on the device now |
+| `POST` | `/api/scenes/preview` | Render ad-hoc scene content on the device without saving it |
 | `GET` | `/api/schedules` | Every scene start marker, ordered by day then slot |
 | `PUT` | `/api/schedules` | Replace the entire weekly schedule |
 
 A scene and everything it owns is always written and read as one aggregate, in a single transaction.
+
+Pushing a scene is a sequence of separate POSTs to the device, in this order: `Draw/ClearHttpText`, `Draw/ResetHttpGifId`, one `Draw/SendHttpGif` **per frame** (sharing `PicNum` and `PicID`, differing by `PicOffset`), then a single `Draw/SendHttpItemList` holding every element. A multi-frame loop cannot go out in one call — the device reassembles it from the per-frame offsets.
 
 Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `PicData` string the device expects, so nothing is re-encoded on the way out. The API rejects any frame that does not decode to precisely 12288 bytes. Converting a PNG into that form is the browser's job; the API never handles image files. Frame order comes from the position in the `frames` array, so clients never assign indexes themselves.
 
@@ -189,7 +197,7 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
 | --- | --- |
 | `Command` | Always `Draw/SendHttpItemList` for every element type; not a per-scene setting |
 | `TextId` | Assigned sequentially when the request is built; not a per-scene setting |
-| `type` | Fixed per `SceneElement.type`: `time` → `5`, `day_of_week` → `14`, `temperature` → `17`; `date` expands into three fixed entries (`9` / `22` / `8`) |
+| `type` | Fixed per `SceneElement.type` — see the mapping table above |
 | `TextString` | The displayed content is inherently determined by the element type (the device fills in the actual date/time/temperature value itself), so free text is not used |
 
 ## Development Roadmap
@@ -208,9 +216,10 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
   - [x] Scene aggregate CRUD (scene + elements + image loop in one operation)
   - [x] Weekly schedule replace
   - [x] Request validation, including `PicData` size checks
-- [ ] **Phase 4: Pixoo64 integration module**
-  - Device discovery client (`FindDevice`)
-  - Logic to build `CommandList` from scene settings
+- [x] **Phase 4: Pixoo64 integration module**
+  - [x] Device discovery client (`FindDevice`)
+  - [x] Logic to build device commands from scene settings
+  - [x] Push and preview endpoints
 - [ ] **Phase 5: Scheduler implementation**
   - A 10-minute cron that resolves the active scene and sends commands to the Pixoo64
 - [ ] **Phase 6: Next.js + shadcn frontend**

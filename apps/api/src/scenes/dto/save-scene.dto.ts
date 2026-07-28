@@ -18,7 +18,9 @@ import { IsPicData } from '../../common/validators/is-pic-data.validator';
 import type { SceneElementType } from '../entities/scene-element.entity';
 
 const SCENE_ELEMENT_TYPES: SceneElementType[] = [
-  'date',
+  'date_month',
+  'date_separator',
+  'date_day',
   'day_of_week',
   'time',
   'temperature',
@@ -85,15 +87,10 @@ export class SceneImageDto {
 }
 
 /**
- * A scene and everything it owns. Used for both create and replace: a PUT carries
- * the complete desired state, and any element or frame missing from it is removed.
+ * What a scene actually displays. Shared by the stored scene and by previews,
+ * which render the same content without ever touching the database.
  */
-export class SaveSceneDto {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(255)
-  name: string;
-
+export class SceneContentDto {
   /** Omit or send null for a scene with no background image. */
   @IsOptional()
   @ValidateNested()
@@ -104,4 +101,15 @@ export class SaveSceneDto {
   @ValidateNested({ each: true })
   @Type(() => SceneElementDto)
   elements: SceneElementDto[];
+}
+
+/**
+ * A scene and everything it owns. Used for both create and replace: a PUT carries
+ * the complete desired state, and any element or frame missing from it is removed.
+ */
+export class SaveSceneDto extends SceneContentDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  name: string;
 }

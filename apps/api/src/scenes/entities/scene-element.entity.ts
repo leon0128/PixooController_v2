@@ -12,10 +12,19 @@ import { Scene } from './scene.entity';
 /**
  * Which Pixoo ItemList entry a scene element renders as. The numeric `type` code
  * the device expects is derived from this when the request is built, so it is not
- * stored: time -> 5, day_of_week -> 14, temperature -> 17, and date expands into
- * three entries (9 / 22 / 8).
+ * stored — see PIXOO_ITEM_TYPES in the pixoo module for the mapping.
+ *
+ * The date is split into three separately positioned elements because the device
+ * renders the month, the separator and the day as three independent ItemList
+ * entries, each with its own coordinates and size.
  */
-export type SceneElementType = 'date' | 'day_of_week' | 'time' | 'temperature';
+export type SceneElementType =
+  | 'date_month'
+  | 'date_separator'
+  | 'date_day'
+  | 'day_of_week'
+  | 'time'
+  | 'temperature';
 
 /** One text element overlaid on a scene, mapped onto a Draw/SendHttpItemList entry. */
 @Entity('scene_elements')
