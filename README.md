@@ -38,8 +38,10 @@ Everything runs in containers.
     ├── web/               # Next.js + shadcn/ui
     │   └── Dockerfile
     └── api/               # NestJS + TypeORM
-        ├── src/scenes/entities/
-        ├── src/schedules/entities/
+        ├── src/scenes/           # scene aggregate CRUD
+        ├── src/schedules/        # weekly schedule + resolution
+        ├── src/scheduler/        # the 10-minute cron
+        ├── src/pixoo/            # device discovery and command building
         ├── src/database/         # DataSource + migrations
         └── Dockerfile
 ```
@@ -166,6 +168,17 @@ Constraints enforced at the database level:
 
 A `schedules` row records only where a scene **starts**. It has no end: a scene runs until the next entry on the weekly timeline, which is treated as a single loop — the slot before Sunday 00:00 is Saturday 23:50. One entry anywhere is therefore enough to cover the whole week, and playback never has a gap. An empty table simply means nothing is scheduled.
 
+Days and slots are wall-clock local time. The `api` container therefore runs on `TZ` (default `Asia/Tokyo`) rather than UTC.
+
+## Scheduler
+
+A cron in the API evaluates the schedule every 10 minutes, on the slot boundary.
+
+- It sends a scene **only when the active one changes**. The device keeps animating, ticking the clock and refreshing the temperature by itself, so re-sending an unchanged scene would just restart its loop from the first frame.
+- If nothing is scheduled, the display is left as-is rather than cleared.
+- A failed push is not recorded as sent, so the next tick retries it. A scene deleted out from under the scheduler is logged and skipped rather than crashing the job.
+- Editing a scene or the schedule does not push anything by itself — use `POST /api/scenes/:id/push` to see a change immediately, or wait for the next tick.
+
 ## API
 
 Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/scenes`. The `NEXT_PUBLIC_API_URL` and `API_URL` variables handed to the web container already include that prefix, so the frontend appends the route directly (`` `${API_URL}/scenes` ``).
@@ -220,8 +233,9 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
   - [x] Device discovery client (`FindDevice`)
   - [x] Logic to build device commands from scene settings
   - [x] Push and preview endpoints
-- [ ] **Phase 5: Scheduler implementation**
-  - A 10-minute cron that resolves the active scene and sends commands to the Pixoo64
+- [x] **Phase 5: Scheduler implementation**
+  - [x] Weekly-timeline resolution, wrapping across days and the week boundary
+  - [x] 10-minute cron that pushes only when the active scene changes
 - [ ] **Phase 6: Next.js + shadcn frontend**
   - Scene editor screen, schedule management screen (a day-of-week x 10-minute timetable UI)
 - [ ] **Phase 7: Integration testing & real-device verification**

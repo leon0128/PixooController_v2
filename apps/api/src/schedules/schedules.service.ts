@@ -4,6 +4,7 @@ import { DataSource, In } from 'typeorm';
 import { Scene } from '../scenes/entities/scene.entity';
 import { ReplaceSchedulesDto, ScheduleEntryDto } from './dto/replace-schedules.dto';
 import { Schedule } from './entities/schedule.entity';
+import { resolveActiveMarker } from './schedule-resolver';
 
 @Injectable()
 export class SchedulesService {
@@ -13,6 +14,11 @@ export class SchedulesService {
     return this.dataSource.getRepository(Schedule).find({
       order: { dayOfWeek: 'ASC', slot: 'ASC' },
     });
+  }
+
+  /** The entry whose scene should be playing at `now`, or null if none is scheduled. */
+  async findActive(now: Date): Promise<Schedule | null> {
+    return resolveActiveMarker(await this.findAll(), now);
   }
 
   /** Replaces the whole week in one transaction. */

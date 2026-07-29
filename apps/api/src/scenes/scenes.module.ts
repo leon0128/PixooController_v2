@@ -15,5 +15,6 @@ import { ScenesService } from './scenes.service';
   ],
   controllers: [ScenesController],
   providers: [ScenesService],
+  exports: [ScenesService],
 })
 export class ScenesModule {}

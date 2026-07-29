@@ -41,9 +41,9 @@ export class Schedule {
   @JoinColumn({ name: 'scene_id' })
   scene: Scene;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 }

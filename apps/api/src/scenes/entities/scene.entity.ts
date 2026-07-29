@@ -29,9 +29,9 @@ export class Scene {
   @OneToMany(() => Schedule, (schedule) => schedule.scene)
   schedules: Schedule[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 }

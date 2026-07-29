@@ -27,6 +27,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pixoo}:${POSTGRES_PASSWORD:-pixoo}@db:5432/${POSTGRES_DB:-pixoo}
       PORT: 3001
       WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      # Weekdays and 10-minute slots are wall-clock local time, so the container
+      # must not run on UTC.
+      TZ: ${TZ:-Asia/Tokyo}
     ports:
       - "${API_PORT:-3001}:3001"
     volumes:
