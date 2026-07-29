@@ -313,6 +313,23 @@ docker compose exec api npm run migration:generate -- src/database/migrations/Yo
 
 `migration:revert` rolls back the most recent migration and `migration:show` lists what has been applied. Entities live under `src/<feature>/entities/`, migrations under `src/database/migrations/`.
 
+### Debug logging
+
+Every request to the device is logged at `debug` level with its body and the response it got back. Timestamps are stamped to the millisecond (`YYYY-MM-DD HH:mm:ss.SSS`), which is fine enough to separate the burst of requests a single push produces and to see how long each one took.
+
+```
+2026-07-30 00:29:42.240 DEBUG [PixooDeviceClient] POST http://192.168.0.203:80/post {"Command":"Draw/SendHttpGif","PicNum":3,"PicWidth":64,"PicOffset":0,"PicID":0,"PicSpeed":400,"PicData":"(Base64 image data)"}
+2026-07-30 00:29:42.396 DEBUG [PixooDeviceClient] Draw/SendHttpGif <- {"error_code":0}
+```
+
+`PicData` is stood in for rather than printed: a frame is 16 KB of Base64 that tells you nothing when read, and it would bury the fields that are actually worth checking. Everything else goes out in full.
+
+To silence the request log, drop `debug` from the log levels in `main.ts`:
+
+```ts
+logger: new MillisecondConsoleLogger({ logLevels: ['log', 'warn', 'error'] }),
+```
+
 ### Networking note
 
 The `api` container needs to reach both `app.divoom-gz.com` (for `FindDevice`) and the Pixoo64's private LAN address. Outbound traffic to both should work over Docker's default bridge network without extra configuration, but this has not been exercised yet — it gets confirmed in Phase 4, when the device client is actually implemented.

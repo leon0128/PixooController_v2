@@ -10,6 +10,17 @@ const DISCOVERY_URL = 'https://app.divoom-gz.com/Device/ReturnSameLanDevice';
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const DEVICE_TIMEOUT_MS = 5_000;
 
+/**
+ * The body as it appears in the log. A frame of PicData is 16 KB of Base64 that
+ * says nothing when read, so it is stood in for while every other field — the ones
+ * worth checking against the device's behaviour — is printed in full.
+ */
+function toLogBody(command: PixooCommand): string {
+  return JSON.stringify(command, (key, value: unknown) =>
+    key === 'PicData' ? '(Base64 image data)' : value,
+  );
+}
+
 @Injectable()
 export class PixooDeviceClient {
   private readonly logger = new Logger(PixooDeviceClient.name);
@@ -20,6 +31,8 @@ export class PixooDeviceClient {
    */
   async discover(): Promise<DiscoveredDevice> {
     let payload: { ReturnCode?: number; ReturnMessage?: string; DeviceList?: DiscoveredDevice[] };
+
+    this.logger.debug(`POST ${DISCOVERY_URL}`);
 
     try {
       const response = await fetch(DISCOVERY_URL, {
@@ -35,6 +48,8 @@ export class PixooDeviceClient {
         `Device discovery failed: ${(error as Error).message}`,
       );
     }
+
+    this.logger.debug(`FindDevice <- ${JSON.stringify(payload)}`);
 
     if (payload.ReturnCode !== 0) {
       throw new ServiceUnavailableException(
@@ -53,13 +68,17 @@ export class PixooDeviceClient {
 
   /** POSTs one command and fails loudly on a non-zero error_code. */
   async send(ip: string, command: PixooCommand): Promise<void> {
+    const url = `http://${ip}:80/post`;
+    const body = JSON.stringify(command);
     let payload: { error_code?: number };
 
+    this.logger.debug(`POST ${url} ${toLogBody(command)}`);
+
     try {
-      const response = await fetch(`http://${ip}:80/post`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(command),
+        body,
         signal: AbortSignal.timeout(DEVICE_TIMEOUT_MS),
       });
       if (!response.ok) {
@@ -71,6 +90,8 @@ export class PixooDeviceClient {
         `${command.Command} failed against ${ip}: ${(error as Error).message}`,
       );
     }
+
+    this.logger.debug(`${command.Command} <- ${JSON.stringify(payload)}`);
 
     if (payload.error_code !== 0) {
       throw new BadGatewayException(
