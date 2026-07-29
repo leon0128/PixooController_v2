@@ -36,6 +36,9 @@ Everything runs in containers.
 ├── .env.example           # compose settings (credentials, host ports)
 └── apps/
     ├── web/               # Next.js + shadcn/ui
+    │   ├── src/app/       # routes: /scenes, /scenes/[id], /schedules
+    │   ├── src/components/
+    │   ├── src/lib/       # API client, PicData conversion
     │   └── Dockerfile
     └── api/               # NestJS + TypeORM
         ├── src/scenes/           # scene aggregate CRUD
@@ -197,6 +200,24 @@ Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/s
 
 A scene and everything it owns is always written and read as one aggregate, in a single transaction.
 
+## Web UI
+
+| Route | Purpose |
+| --- | --- |
+| `/scenes` | Every scene, with a button to play each one on the device |
+| `/scenes/new`, `/scenes/[id]` | Edit a scene's name, background frames and elements |
+| `/schedules` | Weekday x 10-minute grid; click a cell to place a scene's start time |
+
+Reads happen in server components and go over the compose network; the browser only talks to the API for writes, previews and pushes. The API client picks `API_URL` when it runs on the server and falls back to `NEXT_PUBLIC_API_URL` in the browser.
+
+Uploaded images are converted to `PicData` in the browser — decoded onto a canvas, stripped of the alpha channel and Base64-encoded — so the API only ever sees the exact string it forwards to the device. Anything that is not exactly 64x64 is rejected rather than rescaled, which would wreck pixel art.
+
+The editor's preview is a magnified 64x64 canvas with the elements drawn as labelled boxes. It shows **placement only**: the device renders text with its own bitmap fonts and substitutes the live values, so the real appearance has to be checked with "Preview on device".
+
+The schedule grid colours each slot by the scene playing in it, following the same wrapping rule as the API, so a single start marker visibly fills the whole week.
+
+## Command sequence
+
 Pushing a scene is a sequence of separate POSTs to the device, in this order: `Draw/ClearHttpText`, `Draw/ResetHttpGifId`, one `Draw/SendHttpGif` **per frame** (sharing `PicNum` and `PicID`, differing by `PicOffset`), then a single `Draw/SendHttpItemList` holding every element. A multi-frame loop cannot go out in one call — the device reassembles it from the per-frame offsets.
 
 Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `PicData` string the device expects, so nothing is re-encoded on the way out. The API rejects any frame that does not decode to precisely 12288 bytes. Converting a PNG into that form is the browser's job; the API never handles image files. Frame order comes from the position in the `frames` array, so clients never assign indexes themselves.
@@ -236,8 +257,10 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
 - [x] **Phase 5: Scheduler implementation**
   - [x] Weekly-timeline resolution, wrapping across days and the week boundary
   - [x] 10-minute cron that pushes only when the active scene changes
-- [ ] **Phase 6: Next.js + shadcn frontend**
-  - Scene editor screen, schedule management screen (a day-of-week x 10-minute timetable UI)
+- [x] **Phase 6: Next.js + shadcn frontend**
+  - [x] Scene list, with per-scene push to the device
+  - [x] Scene editor: image frames, elements, and a magnified 64x64 placement preview
+  - [x] Schedule screen: a weekday x 10-minute grid, edited through a dialog
 - [ ] **Phase 7: Integration testing & real-device verification**
 - [ ] **Phase 8: Wrap-up**
 
