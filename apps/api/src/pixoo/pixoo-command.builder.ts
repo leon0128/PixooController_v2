@@ -8,20 +8,39 @@ import type {
 } from './pixoo.types';
 
 /**
- * Numeric ItemList type codes, confirmed against the device with Postman. The
- * device supplies the value itself for every one of these, so TextString only has
- * to be the placeholder the verified requests used.
+ * The numeric ItemList code for each display type.
+ * http://doc.divoom-gz.com/web/#/12?page_id=234
+ *
+ * `needsFont` records which characters the chosen font has to cover, taken from
+ * the same document — a font without letters cannot render a weekday, for example.
  */
 export const PIXOO_ITEM_TYPES: Record<
   SceneElementType,
-  { type: number; textString: string }
+  { type: number; needsFont: string }
 > = {
-  date_month: { type: 9, textString: 'Month' },
-  date_separator: { type: 22, textString: ':' },
-  date_day: { type: 8, textString: 'Date' },
-  day_of_week: { type: 14, textString: 'Week' },
-  time: { type: 5, textString: 'Clock' },
-  temperature: { type: 17, textString: 'Temperature' },
+  second: { type: 1, needsFont: 'digits' },
+  minute: { type: 2, needsFont: 'digits' },
+  hour: { type: 3, needsFont: 'digits' },
+  am_pm: { type: 4, needsFont: 'a, m, p' },
+  hour_minute: { type: 5, needsFont: 'digits' },
+  hour_minute_second: { type: 6, needsFont: 'digits' },
+  year: { type: 7, needsFont: 'digits' },
+  day: { type: 8, needsFont: 'digits' },
+  month: { type: 9, needsFont: 'digits' },
+  month_year: { type: 10, needsFont: 'digits' },
+  english_month_day: { type: 11, needsFont: 'letters' },
+  day_month_year: { type: 12, needsFont: 'digits' },
+  weekday_short: { type: 13, needsFont: 'letters' },
+  weekday_medium: { type: 14, needsFont: 'letters' },
+  weekday_long: { type: 15, needsFont: 'letters' },
+  english_month: { type: 16, needsFont: 'letters' },
+  temperature: { type: 17, needsFont: 'digits, c, f' },
+  temperature_max: { type: 18, needsFont: 'digits, c, f' },
+  temperature_min: { type: 19, needsFont: 'digits, c, f' },
+  weather: { type: 20, needsFont: 'letters' },
+  noise: { type: 21, needsFont: 'digits' },
+  text: { type: 22, needsFont: 'the characters used' },
+  url_text: { type: 23, needsFont: 'the characters returned' },
 };
 
 /**
@@ -31,8 +50,8 @@ export const PIXOO_ITEM_TYPES: Record<
 const PIC_ID = 0;
 
 function toItem(element: PixooElementInput, textId: number): PixooItem {
-  const { type, textString } = PIXOO_ITEM_TYPES[element.type];
-  return {
+  const { type } = PIXOO_ITEM_TYPES[element.type];
+  const item: PixooItem = {
     TextId: textId,
     type,
     x: element.x,
@@ -41,48 +60,88 @@ function toItem(element: PixooElementInput, textId: number): PixooItem {
     font: element.font,
     TextWidth: element.textWidth,
     Textheight: element.textHeight,
-    TextString: textString,
     speed: element.speed,
     color: element.color,
     update_time: element.updateTime,
     align: element.align,
   };
+
+  // TextString is documented as optional and only carries meaning for the two types
+  // whose content the device does not produce itself.
+  if (element.text) item.TextString = element.text;
+
+  return item;
+}
+
+/** Wipes both layers the previous scene left behind. */
+export function buildClearCommandList(): PixooCommand[] {
+  return [{ Command: 'Draw/ClearHttpText' }, { Command: 'Draw/ResetHttpGifId' }];
 }
 
 /**
- * Turns a scene into the ordered list of request bodies to POST at the device.
- *
- * Each animation frame is its own request: the device assembles them from PicNum
- * and PicOffset, which is why a multi-frame loop cannot be sent in one call.
+ * The background frames. Each stays its own entry — the device reassembles the loop
+ * from PicNum and PicOffset — but they all travel in the one request.
  */
-export function buildSceneCommands(scene: PixooSceneInput): PixooCommand[] {
-  const commands: PixooCommand[] = [
-    // Clear whatever the previous scene left behind.
-    { Command: 'Draw/ClearHttpText' },
-    { Command: 'Draw/ResetHttpGifId' },
-  ];
+export function buildImageCommandList(scene: PixooSceneInput): PixooCommand[] {
+  if (!scene.image || scene.image.frames.length === 0) return [];
 
-  if (scene.image && scene.image.frames.length > 0) {
-    const picNum = scene.image.frames.length;
-    scene.image.frames.forEach((picData, index) => {
-      commands.push({
-        Command: 'Draw/SendHttpGif',
-        PicNum: picNum,
-        PicWidth: PIXOO_SIZE,
-        PicOffset: index,
-        PicID: PIC_ID,
-        PicSpeed: scene.image!.picSpeed,
-        PicData: picData,
-      });
-    });
-  }
+  const { picSpeed, frames } = scene.image;
+  return frames.map((picData, index) => ({
+    Command: 'Draw/SendHttpGif',
+    PicNum: frames.length,
+    PicWidth: PIXOO_SIZE,
+    PicOffset: index,
+    PicID: PIC_ID,
+    PicSpeed: picSpeed,
+    PicData: picData,
+  }));
+}
 
-  if (scene.elements.length > 0) {
-    commands.push({
+/** The text overlay, as a single item list. */
+export function buildElementCommandList(scene: PixooSceneInput): PixooCommand[] {
+  if (scene.elements.length === 0) return [];
+
+  return [
+    {
       Command: 'Draw/SendHttpItemList',
       ItemList: scene.elements.map((element, index) => toItem(element, index + 1)),
-    });
+    },
+  ];
+}
+
+/** One POST to the device, named so the debug log says which step it is. */
+export interface PixooSceneRequest {
+  step: 'clear' | 'image' | 'elements';
+  command: PixooCommand;
+}
+
+/** Wraps commands into a `Draw/CommandList` body. */
+function toCommandList(commands: PixooCommand[]): PixooCommand {
+  return { Command: 'Draw/CommandList', CommandList: commands };
+}
+
+/**
+ * The requests that push a scene, in order: clear both layers, send the background,
+ * then send the text so it lands on top. Each is one batched `Draw/CommandList`.
+ * http://doc.divoom-gz.com/web/#/12?page_id=241
+ *
+ * A step with nothing to send is left out — clearing is the clear step's job, so an
+ * empty image or element list means no request rather than an empty one.
+ */
+export function buildSceneRequests(scene: PixooSceneInput): PixooSceneRequest[] {
+  const requests: PixooSceneRequest[] = [
+    { step: 'clear', command: toCommandList(buildClearCommandList()) },
+  ];
+
+  const image = buildImageCommandList(scene);
+  if (image.length > 0) {
+    requests.push({ step: 'image', command: toCommandList(image) });
   }
 
-  return commands;
+  const elements = buildElementCommandList(scene);
+  if (elements.length > 0) {
+    requests.push({ step: 'elements', command: toCommandList(elements) });
+  }
+
+  return requests;
 }

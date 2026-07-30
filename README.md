@@ -85,22 +85,23 @@ The main commands have been verified against the real device with Postman. Scene
 | Scene setting | Command | Notes |
 | --- | --- | --- |
 | Background images (multiple, loop interval) | `Draw/SendHttpGif` | Uses `PicNum` / `PicWidth` / `PicOffset` / `PicID` / `PicSpeed` / `PicData` |
-| Date / day-of-week / time / temperature display | `Draw/SendHttpItemList` | All four element types share this single command; an `ItemList` entry's numeric `type` field is what distinguishes them |
+| Date / weekday / time / sensor / text display | `Draw/SendHttpItemList` | Every element type shares this one command; an `ItemList` entry's numeric `type` field is what distinguishes them |
 
-`ItemList.type` values confirmed via testing, along with the placeholder `TextString` each one was verified with (the device substitutes the real value itself):
+All 23 [display types](http://doc.divoom-gz.com/web/#/12?page_id=234) are supported. `SceneElement.type` is named after Divoom's own `DIVOOM_DISP_CUSTOM_DIAL_SUPPORT_*` constants, and the numeric `ItemList.type` is derived when the request is built:
 
-| `SceneElement.type` | Pixoo `type` | `TextString` |
-| --- | --- | --- |
-| `time` | `5` | `Clock` |
-| `day_of_week` | `14` | `Week` |
-| `temperature` | `17` | `Temperature` |
-| `date_month` | `9` | `Month` |
-| `date_separator` | `22` | `:` |
-| `date_day` | `8` | `Date` |
+| Group | `SceneElement.type` → code |
+| --- | --- |
+| Time | `second` 1, `minute` 2, `hour` 3, `am_pm` 4, `hour_minute` 5, `hour_minute_second` 6 |
+| Date | `year` 7, `day` 8, `month` 9, `month_year` 10, `english_month_day` 11, `day_month_year` 12, `english_month` 16 |
+| Weekday | `weekday_short` 13, `weekday_medium` 14, `weekday_long` 15 |
+| Sensors | `temperature` 17, `temperature_max` 18, `temperature_min` 19, `weather` 20, `noise` 21 |
+| Custom | `text` 22, `url_text` 23 |
 
-The date is three separate element types rather than one, because the device draws the month, the separator and the day as independent `ItemList` entries — each needs its own coordinates and size.
+The device produces the value for every type except the last two, which display what the element carries in its own `text` field: a literal string for `text`, and for `url_text` a URL the device polls every `update_time` seconds, reading a `DispData` string out of the JSON it gets back. `text` is required for those two and rejected for every other type, where it is dropped rather than stored — which is why `TextString` is only sent for those two.
 
-Each element's position, color, and font are mapped to `ItemList` fields such as `x` / `y` / `font` / `color` / `align`. `PicData` and `ItemList[].TextString` values themselves are opaque payloads (Base64 bitmap / device-internal placeholder text respectively) — the actual bitmap encoding is produced by the app's own image encoder when building each request.
+A font has to actually contain the characters a type renders — digits for a clock, letters for a weekday, `c`/`f` for a temperature — so the font picker shows each font's charset.
+
+Each element's position, color and font map onto the `ItemList` fields `x` / `y` / `font` / `color` / `align`.
 
 ## Data Model (Overview)
 
@@ -132,7 +133,8 @@ erDiagram
     SceneElement {
         int id PK
         int scene_id FK
-        string type "date | day_of_week | time | temperature"
+        string type "one of 23 display types"
+        varchar text "TextString; only for the text and url_text types"
         int x
         int y
         int dir
@@ -195,6 +197,7 @@ Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/s
 | `DELETE` | `/api/scenes/:id` | Delete a scene and everything referencing it |
 | `POST` | `/api/scenes/:id/push` | Play a stored scene on the device now |
 | `POST` | `/api/scenes/preview` | Render ad-hoc scene content on the device without saving it |
+| `GET` | `/api/fonts` | The fonts an element can be rendered in |
 | `GET` | `/api/schedules` | Every scene start marker, ordered by day then slot |
 | `PUT` | `/api/schedules` | Replace the entire weekly schedule |
 
@@ -212,13 +215,71 @@ Reads happen in server components and go over the compose network; the browser o
 
 Uploaded images are converted to `PicData` in the browser — decoded onto a canvas, stripped of the alpha channel and Base64-encoded — so the API only ever sees the exact string it forwards to the device. Anything that is not exactly 64x64 is rejected rather than rescaled, which would wreck pixel art.
 
+An element's font is a numeric id the device understands. `/api/fonts` proxies Divoom's catalogue (`https://appin.divoom-gz.com/Device/GetTimeDialFont`) so the editor can describe each one instead of asking for a bare number, and caches the result for an hour since the catalogue does not change.
+
+That endpoint returns each font as a comma-separated string rather than an object:
+
+```
+"232,1,11,20,group1/M00/14/65/eEwpPWMtHhCE7719579,0123456789:"
+   id type  w  h  asset path                       charset
+```
+
+There are **no font names** in it, so the picker identifies a font by what actually distinguishes it — its size and the characters it can render:
+
+```
+#232 · 11x20 · 0123456789:
+#18 · 5x5 · 0123456789km-/:%cfABCDEFGHIJKLMN…
+#2 · 16x16 · image font
+```
+
+The charset may itself contain a comma, so it is parsed as everything past the asset path rather than as a single field. Entries that do not parse are dropped instead of failing the whole catalogue. If the catalogue is unreachable the editor falls back to a plain numeric **Font ID** input, and an id that is not in the list always stays selectable, so no existing scene is silently changed.
+
 The editor's preview is a magnified 64x64 canvas with the elements drawn as labelled boxes. It shows **placement only**: the device renders text with its own bitmap fonts and substitutes the live values, so the real appearance has to be checked with "Preview on device".
 
 The schedule grid colours each slot by the scene playing in it, following the same wrapping rule as the API, so a single start marker visibly fills the whole week.
 
 ## Command sequence
 
-Pushing a scene is a sequence of separate POSTs to the device, in this order: `Draw/ClearHttpText`, `Draw/ResetHttpGifId`, one `Draw/SendHttpGif` **per frame** (sharing `PicNum` and `PicID`, differing by `PicOffset`), then a single `Draw/SendHttpItemList` holding every element. A multi-frame loop cannot go out in one call — the device reassembles it from the per-frame offsets.
+Pushing a scene takes four steps:
+
+| # | Step | Request |
+| --- | --- | --- |
+| 1 | Resolve the device address | `FindDevice` against `app.divoom-gz.com` |
+| 2 | Clear both layers | `Draw/ClearHttpText` + `Draw/ResetHttpGifId` |
+| 3 | Send the background | one `Draw/SendHttpGif` per frame |
+| 4 | Send the text | a single `Draw/SendHttpItemList` |
+
+Steps 2–4 are each one POST to the device, batched into a [`Draw/CommandList`](http://doc.divoom-gz.com/web/#/12?page_id=241):
+
+```json
+{
+  "Command": "Draw/CommandList",
+  "CommandList": [
+    { "Command": "Draw/SendHttpGif", "PicNum": 2, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 500, "PicData": "..." },
+    { "Command": "Draw/SendHttpGif", "PicNum": 2, "PicWidth": 64, "PicOffset": 1, "PicID": 0, "PicSpeed": 500, "PicData": "..." }
+  ]
+}
+```
+
+Each animation frame stays its own entry — the device reassembles the loop from `PicNum` and `PicOffset` — but all the frames travel in the one background request. A step with nothing to send is skipped, so a scene with no elements makes two device requests rather than three.
+
+A 60-frame background makes that request about 1 MB, so the API raises its own JSON body limit to 2 MB; the stock 100 KB would reject anything past six frames.
+
+### Request interval
+
+The device answers a request before it has finished applying it. Send the text too soon after an animation and the display can end up showing only the animation, as if the text were overwritten once playback started. `PIXOO_REQUEST_INTERVAL_MS` (default 500) is the pause left between consecutive device requests; `0` disables it.
+
+```bash
+PIXOO_REQUEST_INTERVAL_MS=1000 docker compose up -d api
+```
+
+The debug log names each step and stamps milliseconds, so the actual spacing is visible:
+
+```
+13:54:13.569 DEBUG [clear]    POST http://192.168.0.203:80/post ...
+13:54:14.134 DEBUG [image]    POST http://192.168.0.203:80/post ...
+13:54:14.945 DEBUG [elements] POST http://192.168.0.203:80/post ...
+```
 
 Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `PicData` string the device expects, so nothing is re-encoded on the way out. The API rejects any frame that does not decode to precisely 12288 bytes. Converting a PNG into that form is the browser's job; the API never handles image files. Frame order comes from the position in the `frames` array, so clients never assign indexes themselves.
 
@@ -232,7 +293,7 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
 | `Command` | Always `Draw/SendHttpItemList` for every element type; not a per-scene setting |
 | `TextId` | Assigned sequentially when the request is built; not a per-scene setting |
 | `type` | Fixed per `SceneElement.type` — see the mapping table above |
-| `TextString` | The displayed content is inherently determined by the element type (the device fills in the actual date/time/temperature value itself), so free text is not used |
+| `TextString` | Stored as `text`, but only for the `text` and `url_text` types; for the rest the device supplies the value |
 
 ## Development Roadmap
 

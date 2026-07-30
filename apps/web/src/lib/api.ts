@@ -1,4 +1,5 @@
 import type {
+  PixooFont,
   SaveScenePayload,
   Scene,
   SceneContentPayload,
@@ -74,6 +75,8 @@ export const api = {
     request<null>(`/scenes/${id}/push`, { method: 'POST' }),
   previewScene: (body: SceneContentPayload) =>
     request<null>('/scenes/preview', { method: 'POST', body }),
+
+  listFonts: () => request<PixooFont[]>('/fonts'),
 
   listSchedules: () => request<ScheduleEntry[]>('/schedules'),
   replaceSchedules: (entries: ScheduleEntryPayload[]) =>

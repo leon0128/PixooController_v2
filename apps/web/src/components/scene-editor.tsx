@@ -9,12 +9,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { FontField } from '@/components/font-field';
 import { FrameThumbnail } from '@/components/frame-thumbnail';
 import { ScenePreview } from '@/components/scene-preview';
 import { ApiError, api } from '@/lib/api';
 import {
+  bearsText,
+  SCENE_ELEMENT_GROUPS,
+  MAX_SCENE_ELEMENTS,
   SCENE_ELEMENT_LABELS,
-  SCENE_ELEMENT_TYPES,
+  SCROLL_DIRECTIONS,
+  TEXT_ALIGNMENTS,
+  type PixooFont,
   type SaveScenePayload,
   type Scene,
   type SceneElement,
@@ -25,6 +31,7 @@ import { cn } from '@/lib/utils';
 
 interface DraftElement {
   type: SceneElementType;
+  text: string | null;
   x: number;
   y: number;
   dir: number;
@@ -37,19 +44,21 @@ interface DraftElement {
   align: number;
 }
 
-/** Values taken from the requests that were verified against the device. */
-const ELEMENT_DEFAULTS: Record<SceneElementType, Partial<DraftElement>> = {
-  date_month: { x: 4, y: 4, font: 18, textWidth: 8, textHeight: 6 },
-  date_separator: { x: 12, y: 7, font: 18, textWidth: 3, textHeight: 2 },
-  date_day: { x: 14, y: 4, font: 18, textWidth: 8, textHeight: 6 },
-  day_of_week: { x: 24, y: 4, font: 18, textWidth: 15, textHeight: 10 },
+/** Starting geometry, taken from the requests that were verified against the device. */
+const ELEMENT_DEFAULTS: Partial<Record<SceneElementType, Partial<DraftElement>>> = {
+  month: { x: 4, y: 4, font: 18, textWidth: 8, textHeight: 6 },
+  day: { x: 14, y: 4, font: 18, textWidth: 8, textHeight: 6 },
+  weekday_medium: { x: 24, y: 4, font: 18, textWidth: 15, textHeight: 10 },
   temperature: { x: 48, y: 4, font: 18, textWidth: 20, textHeight: 10, updateTime: 360 },
-  time: { x: 3, y: 10, font: 232, textWidth: 60, textHeight: 20 },
+  hour_minute: { x: 3, y: 10, font: 232, textWidth: 60, textHeight: 20 },
+  // A URL is polled rather than pushed, so it needs a sane refresh interval.
+  url_text: { textWidth: 64, textHeight: 16, updateTime: 60 },
 };
 
 function toDraftElement(element: SceneElement): DraftElement {
   return {
     type: element.type,
+    text: element.text,
     x: element.x,
     y: element.y,
     dir: element.dir,
@@ -66,6 +75,7 @@ function toDraftElement(element: SceneElement): DraftElement {
 function newElement(type: SceneElementType): DraftElement {
   return {
     type,
+    text: bearsText(type) ? '' : null,
     x: 0,
     y: 0,
     dir: 0,
@@ -80,7 +90,7 @@ function newElement(type: SceneElementType): DraftElement {
   };
 }
 
-export function SceneEditor({ scene }: { scene?: Scene }) {
+export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[] }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const sceneId = scene?.id;
@@ -333,26 +343,39 @@ export function SceneEditor({ scene }: { scene?: Scene }) {
               <CardTitle>Elements</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-wrap gap-1.5">
-                {SCENE_ELEMENT_TYPES.map((type) => (
-                  <Button
-                    key={type}
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setElements((current) => [...current, newElement(type)]);
-                      setSelected(elements.length);
-                    }}
-                  >
-                    <Plus className="size-3" />
-                    {SCENE_ELEMENT_LABELS[type]}
-                  </Button>
-                ))}
+              {/* 23 display types is too many for a row of buttons, so they are
+                  grouped and picked from a list that adds on selection. */}
+              <div className="flex items-center gap-2">
+                <Plus className="text-muted-foreground size-4 shrink-0" />
+                <select
+                  aria-label="Add an element"
+                  disabled={elements.length >= MAX_SCENE_ELEMENTS}
+                  className="border-input bg-background h-9 flex-1 rounded-md border px-2 text-sm disabled:opacity-50"
+                  value=""
+                  onChange={(event) => {
+                    const type = event.target.value as SceneElementType;
+                    if (!type) return;
+                    setSelected(elements.length);
+                    setElements((current) => [...current, newElement(type)]);
+                    event.target.value = '';
+                  }}
+                >
+                  <option value="">Add an element…</option>
+                  {SCENE_ELEMENT_GROUPS.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.types.map((entry) => (
+                        <option key={entry.type} value={entry.type}>
+                          {entry.label} — {entry.example}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
               </div>
 
               {elements.length === 0 && (
                 <p className="text-muted-foreground text-sm">
-                  No elements yet. Add one with the buttons above.
+                  No elements yet. Add one from the list above.
                 </p>
               )}
 
@@ -383,6 +406,32 @@ export function SceneEditor({ scene }: { scene?: Scene }) {
                       </Button>
                     </div>
 
+                    {bearsText(element.type) && (
+                      <div className="mb-3 space-y-1.5">
+                        <Label className="text-xs">
+                          {element.type === 'url_text' ? 'URL' : 'Text'}
+                        </Label>
+                        <Input
+                          value={element.text ?? ''}
+                          maxLength={512}
+                          placeholder={
+                            element.type === 'url_text'
+                              ? 'http://example.com/value'
+                              : 'Text to display'
+                          }
+                          onChange={(event) =>
+                            updateElement(index, { text: event.target.value })
+                          }
+                        />
+                        {element.type === 'url_text' && (
+                          <p className="text-muted-foreground text-xs">
+                            Polled every “Update interval” seconds. The response must be
+                            JSON with a <code>DispData</code> string.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <NumberField
                         label="X"
@@ -402,19 +451,23 @@ export function SceneEditor({ scene }: { scene?: Scene }) {
                         label="Width"
                         value={element.textWidth}
                         min={1}
+                        max={64}
                         onChange={(textWidth) => updateElement(index, { textWidth })}
                       />
                       <NumberField
                         label="Height"
                         value={element.textHeight}
                         min={1}
+                        max={64}
                         onChange={(textHeight) => updateElement(index, { textHeight })}
                       />
-                      <NumberField
-                        label="Font"
+                      <FontField
                         value={element.font}
-                        min={0}
+                        fonts={fonts}
                         onChange={(font) => updateElement(index, { font })}
+                        // A font is described by its charset, which needs the
+                        // whole row to stay readable.
+                        className="col-span-2 sm:col-span-4"
                       />
                       <NumberField
                         label="Update interval (s)"
@@ -423,10 +476,45 @@ export function SceneEditor({ scene }: { scene?: Scene }) {
                         onChange={(updateTime) => updateElement(index, { updateTime })}
                       />
                       <NumberField
-                        label="Align"
-                        value={element.align}
-                        onChange={(align) => updateElement(index, { align })}
+                        label="Scroll speed (ms)"
+                        value={element.speed}
+                        min={0}
+                        onChange={(speed) => updateElement(index, { speed })}
                       />
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Scroll direction</Label>
+                        <select
+                          aria-label="Scroll direction"
+                          className="border-input bg-background h-9 w-full rounded-md border px-2 text-sm"
+                          value={element.dir}
+                          onChange={(event) =>
+                            updateElement(index, { dir: Number(event.target.value) })
+                          }
+                        >
+                          {SCROLL_DIRECTIONS.map((direction) => (
+                            <option key={direction.value} value={direction.value}>
+                              {direction.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Align</Label>
+                        <select
+                          aria-label="Align"
+                          className="border-input bg-background h-9 w-full rounded-md border px-2 text-sm"
+                          value={element.align}
+                          onChange={(event) =>
+                            updateElement(index, { align: Number(event.target.value) })
+                          }
+                        >
+                          {TEXT_ALIGNMENTS.map((alignment) => (
+                            <option key={alignment.value} value={alignment.value}>
+                              {alignment.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs">Color</Label>
                         <div className="flex items-center gap-1.5">

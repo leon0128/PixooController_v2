@@ -4,11 +4,36 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import type { DiscoveredDevice, PixooCommand } from './pixoo.types';
+import type { DiscoveredDevice, PixooCommand, PixooFont } from './pixoo.types';
 
 const DISCOVERY_URL = 'https://app.divoom-gz.com/Device/ReturnSameLanDevice';
+const FONT_LIST_URL = 'https://appin.divoom-gz.com/Device/GetTimeDialFont';
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const DEVICE_TIMEOUT_MS = 5_000;
+
+/**
+ * Parses one entry of GetTimeDialFont, which arrives as a comma-separated string
+ * rather than an object: `id,type,width,height,assetPath,charset`.
+ *
+ * The charset can itself contain commas, so it is taken as everything past the
+ * asset path instead of as a single field. Entries that do not parse are dropped —
+ * one malformed row should not cost the whole catalogue.
+ */
+export function parseFontEntry(entry: string): PixooFont | null {
+  const parts = entry.split(',');
+  if (parts.length < 5) return null;
+
+  const [id, type, width, height] = parts.map((part) => part.trim());
+  if (![id, type, width, height].every((value) => /^\d+$/.test(value))) return null;
+
+  return {
+    id: Number(id),
+    type: Number(type),
+    width: Number(width),
+    height: Number(height),
+    charset: parts.slice(5).join(','),
+  };
+}
 
 /**
  * The body as it appears in the log. A frame of PicData is 16 KB of Base64 that
@@ -66,13 +91,58 @@ export class PixooDeviceClient {
     return device;
   }
 
+  /**
+   * The fonts the device can render text in, from Divoom's catalogue.
+   *
+   * Returns an empty list rather than throwing when the catalogue is unavailable:
+   * the font is only a number in a form, and not being able to describe it should
+   * not stop a scene from being edited.
+   */
+  async fetchFonts(): Promise<PixooFont[]> {
+    let payload: { ReturnCode?: number; FontList?: unknown };
+
+    this.logger.debug(`POST ${FONT_LIST_URL}`);
+
+    try {
+      const response = await fetch(FONT_LIST_URL, {
+        method: 'POST',
+        signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      payload = await response.json();
+    } catch (error) {
+      this.logger.warn(`Font list unavailable: ${(error as Error).message}`);
+      return [];
+    }
+
+    if (payload.ReturnCode !== 0 || !Array.isArray(payload.FontList)) {
+      this.logger.warn(
+        `GetTimeDialFont returned code ${payload.ReturnCode} with no usable list`,
+      );
+      return [];
+    }
+
+    const fonts = payload.FontList.filter(
+      (entry): entry is string => typeof entry === 'string',
+    )
+      .map(parseFontEntry)
+      .filter((font): font is PixooFont => font !== null)
+      .sort((a, b) => a.id - b.id);
+
+    this.logger.debug(
+      `GetTimeDialFont <- ${payload.FontList.length} entrie(s), ${fonts.length} parsed`,
+    );
+    return fonts;
+  }
+
   /** POSTs one command and fails loudly on a non-zero error_code. */
-  async send(ip: string, command: PixooCommand): Promise<void> {
+  async send(ip: string, command: PixooCommand, step?: string): Promise<void> {
     const url = `http://${ip}:80/post`;
     const body = JSON.stringify(command);
+    const label = step ? `[${step}] ` : '';
     let payload: { error_code?: number };
 
-    this.logger.debug(`POST ${url} ${toLogBody(command)}`);
+    this.logger.debug(`${label}POST ${url} ${toLogBody(command)}`);
 
     try {
       const response = await fetch(url, {
@@ -91,7 +161,7 @@ export class PixooDeviceClient {
       );
     }
 
-    this.logger.debug(`${command.Command} <- ${JSON.stringify(payload)}`);
+    this.logger.debug(`${label}${command.Command} <- ${JSON.stringify(payload)}`);
 
     if (payload.error_code !== 0) {
       throw new BadGatewayException(

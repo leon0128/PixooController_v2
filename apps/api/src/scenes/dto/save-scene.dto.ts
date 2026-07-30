@@ -12,23 +12,37 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { IsPicData } from '../../common/validators/is-pic-data.validator';
+import {
+  MAX_SCENE_ELEMENTS,
+  SCENE_ELEMENT_TYPES,
+  SCROLL_DIRECTION_VALUES,
+  TEXT_ALIGNMENT_VALUES,
+  TEXT_BEARING_TYPES,
+} from '../entities/scene-element.entity';
 import type { SceneElementType } from '../entities/scene-element.entity';
 
-const SCENE_ELEMENT_TYPES: SceneElementType[] = [
-  'date_month',
-  'date_separator',
-  'date_day',
-  'day_of_week',
-  'time',
-  'temperature',
-];
+const bearsText = (element: SceneElementDto) =>
+  TEXT_BEARING_TYPES.includes(element.type);
 
 export class SceneElementDto {
   @IsIn(SCENE_ELEMENT_TYPES)
   type: SceneElementType;
+
+  /**
+   * The literal string for `text` and the URL to poll for `url_text`. Every other
+   * type has its value produced by the device, so it is left unset.
+   */
+  // Only validated for the types that need it; for the rest the service drops
+  // whatever came in, since the device produces the value itself.
+  @ValidateIf(bearsText)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(512)
+  text?: string | null;
 
   @IsInt()
   @Min(0)
@@ -40,18 +54,22 @@ export class SceneElementDto {
   @Max(63)
   y: number;
 
-  @IsInt()
+  /** 0: scroll left, 1: scroll right — the device defines no other value. */
+  @IsIn(SCROLL_DIRECTION_VALUES)
   dir: number;
 
   @IsInt()
+  @Min(0)
   font: number;
 
   @IsInt()
   @Min(1)
+  @Max(64)
   textWidth: number;
 
   @IsInt()
   @Min(1)
+  @Max(64)
   textHeight: number;
 
   @IsInt()
@@ -65,7 +83,8 @@ export class SceneElementDto {
   @Min(0)
   updateTime: number;
 
-  @IsInt()
+  /** 1: left, 2: middle, 3: right — the device rejects anything else. */
+  @IsIn(TEXT_ALIGNMENT_VALUES)
   align: number;
 }
 
@@ -97,7 +116,12 @@ export class SceneContentDto {
   @Type(() => SceneImageDto)
   image?: SceneImageDto | null;
 
+  /**
+   * Capped because TextId is assigned from the element's position in this array and
+   * the device requires it to stay below 40.
+   */
   @IsArray()
+  @ArrayMaxSize(MAX_SCENE_ELEMENTS)
   @ValidateNested({ each: true })
   @Type(() => SceneElementDto)
   elements: SceneElementDto[];

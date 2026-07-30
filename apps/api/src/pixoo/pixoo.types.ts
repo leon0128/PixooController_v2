@@ -14,6 +14,8 @@ export interface PixooImageInput {
 
 export interface PixooElementInput {
   type: SceneElementType;
+  /** Sent as TextString; only the `text` and `url_text` types use it. */
+  text?: string | null;
   x: number;
   y: number;
   dir: number;
@@ -38,11 +40,25 @@ export interface PixooItem {
   font: number;
   TextWidth: number;
   Textheight: number;
-  TextString: string;
+  TextString?: string;
   speed: number;
   color: string;
   update_time: number;
   align: number;
+}
+
+/**
+ * A font the device can render text in. Divoom's catalogue has no names for these,
+ * so the size and the supported characters are all there is to tell them apart.
+ */
+export interface PixooFont {
+  id: number;
+  /** Divoom's own classification. 0 are image fonts with no charset, 1 carry one. */
+  type: number;
+  width: number;
+  height: number;
+  /** The characters the font can render; empty for type 0. */
+  charset: string;
 }
 
 export interface DiscoveredDevice {

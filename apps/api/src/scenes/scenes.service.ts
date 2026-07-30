@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { SaveSceneDto } from './dto/save-scene.dto';
-import { SceneElement } from './entities/scene-element.entity';
+import { SceneElement, TEXT_BEARING_TYPES } from './entities/scene-element.entity';
 import { SceneImage } from './entities/scene-image.entity';
 import { SceneImageDetail } from './entities/scene-image-detail.entity';
 import { Scene } from './entities/scene.entity';
@@ -76,7 +76,13 @@ export class ScenesService {
   ): Promise<void> {
     if (dto.elements.length > 0) {
       await manager.getRepository(SceneElement).insert(
-        dto.elements.map((element) => ({ ...element, sceneId })),
+        dto.elements.map((element) => ({
+          ...element,
+          sceneId,
+          // Only the text-bearing types carry content of their own; for the rest the
+          // device produces the value, so anything sent is dropped rather than stored.
+          text: TEXT_BEARING_TYPES.includes(element.type) ? element.text : null,
+        })),
       );
     }
 

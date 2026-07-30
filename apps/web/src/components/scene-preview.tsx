@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 
 export interface PreviewElement {
   type: SceneElementType;
+  text?: string | null;
   x: number;
   y: number;
   textWidth: number;
@@ -68,7 +69,9 @@ export function ScenePreview({
           title={`${SCENE_ELEMENT_LABELS[element.type]} (${element.x}, ${element.y})`}
         >
           <span className="drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]">
-            {SCENE_ELEMENT_LABELS[element.type]}
+            {/* For the custom types the element's own content is more telling
+                than the type name. */}
+            {element.text || SCENE_ELEMENT_LABELS[element.type]}
           </span>
         </div>
       ))}
