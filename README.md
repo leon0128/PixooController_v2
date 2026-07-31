@@ -2,14 +2,14 @@
 
 A web application for managing what is displayed on a Divoom Pixoo64 (a 64x64 pixel dot-matrix display) from a browser.
 
-Display content is defined in units called **Scenes**, each combining a background image with date, day-of-week, temperature, and time overlays. A per-day-of-week **Schedule** (in 10-minute increments) determines which scene is pushed to the Pixoo64 automatically.
+Display content is defined in units called **Scenes**, each combining a looping background image with text overlays — the clock, the date, the weather, your own text, and 19 other display types the device knows how to render. A weekly **Schedule** in 10-minute increments decides which scene is on the display, and the app pushes it there on its own.
 
 ## Key Features
 
-- **Scene management**: configure a background (64x64, multiple images) plus which elements (date / day of week / temperature / time) to show, along with their position, color, and font
-- **Background image loop**: multiple background images are cycled like a GIF at a configurable interval
-- **Schedule management**: assign a scene to each day of the week, in 10-minute increments
-- **Automatic reflection**: the app pushes the scheduled scene to the Pixoo64 automatically once the corresponding time slot begins
+- **Scene management**: a 64x64 background plus any of the device's 23 display types, each positioned, coloured and given a font
+- **Background image loop**: multiple 64x64 images cycled like a GIF at a configurable interval
+- **Schedule management**: place a scene's start time on a weekday x 10-minute grid; it runs until the next one
+- **Automatic reflection**: a cron evaluates the schedule every 10 minutes and pushes a scene when the active one changes
 
 ## Assumptions & Constraints
 
@@ -33,7 +33,7 @@ Everything runs in containers.
 ```
 .
 ├── docker-compose.yml     # web / api / db
-├── .env.example           # compose settings (credentials, host ports)
+├── .env.example           # compose settings (ports, credentials, device tuning)
 └── apps/
     ├── web/               # Next.js + shadcn/ui
     │   ├── src/app/       # routes: /scenes, /scenes/[id], /schedules
@@ -53,16 +53,15 @@ Everything runs in containers.
 
 ### Communicating with the Pixoo64
 
-The Pixoo64 handles displaying the date, day of week, time, and temperature, as well as looping through multiple background images, **natively on the device itself**. Because of this, the backend only needs to do the following:
+The device renders everything itself: it advances the clock, refreshes the weather, and loops the background frames without being told to. The backend only has to describe a scene once.
 
-1. Once it determines which scene should be active, build the corresponding Pixoo64 Control API command(s) from that scene's configuration (background images and each element's position/color/font)
-2. Clear whatever the previous scene left on the device (`Draw/ClearHttpText`, `Draw/ResetHttpGifId`), then send the new scene's command(s) to the Pixoo64
-
-After a single send, the device continues to advance the clock, refresh the temperature, and loop the background images on its own. There is **no need for the backend to continuously re-render and re-send frames**. The only thing the backend does proactively is evaluate the schedule every 10 minutes and send a command when needed.
+That shapes the whole design. There is **no render loop and no frame streaming** — a scene is pushed when it becomes active, and the device takes it from there. The only thing the backend does on a timer is ask, every 10 minutes, whether the scene that should be showing has changed.
 
 ### Handling of Device Information
 
-The Pixoo64's IP address and other device information are not persisted in the database. Immediately before sending a command, the app calls the Device Discovery API (`FindDevice`) to find the device on the local network, and sends the Control API request to the discovered IP address.
+The device's address is not stored in the database. It is looked up through Divoom's `FindDevice` service immediately before every push, so a device that moves to a new address is simply found at the new one.
+
+That service has been observed answering successfully with an **empty** device list while the device itself was replying on the LAN in under 100 ms. The last address it did return is therefore held in memory and used when a later lookup comes back empty, so a healthy device does not become uncontrollable because a cloud service is having a bad minute. The cache lives only as long as the process; nothing is written to disk.
 
 ```mermaid
 sequenceDiagram
@@ -330,7 +329,10 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
 - [x] **Phase 7: Integration testing & real-device verification**
   - [x] End-to-end scenario, error handling, boundaries and a clean-environment rebuild
   - [x] Scheduler auto-push verified against the real device
-- [ ] **Phase 8: Wrap-up**
+- [x] **Phase 8: Wrap-up**
+  - [x] README brought back in line with the implementation
+  - [x] Production Docker stages for both apps
+  - [x] Scaffold leftovers removed
 
 ## Setup
 
@@ -401,6 +403,25 @@ To silence the request log, drop `debug` from the log levels in `main.ts`:
 logger: new MillisecondConsoleLogger({ logLevels: ['log', 'warn', 'error'] }),
 ```
 
-### Networking note
+### Networking
 
-The `api` container needs to reach both `app.divoom-gz.com` (for `FindDevice`) and the Pixoo64's private LAN address. Outbound traffic to both should work over Docker's default bridge network without extra configuration, but this has not been exercised yet — it gets confirmed in Phase 4, when the device client is actually implemented.
+The `api` container reaches both `app.divoom-gz.com` (for `FindDevice`) and the Pixoo64's private LAN address over Docker's default bridge network — verified against the real device, no extra configuration needed.
+
+### Production images
+
+`docker compose` builds the `development` stage, which bind-mounts the source and reloads on change. Each Dockerfile also has a `production` stage, which is the default target:
+
+```bash
+docker build -t pixoo-api:prod ./apps/api
+docker build -t pixoo-web:prod ./apps/web --build-arg NEXT_PUBLIC_API_URL=http://your-host:3001/api
+```
+
+Both run as the image's unprivileged `node` user and carry only production dependencies. The web image uses Next.js `output: 'standalone'`, so it ships the server plus the dependencies it actually imports rather than the whole tree — 305 MB against the 1.64 GB development image; the API is 385 MB against 763 MB.
+
+`NEXT_PUBLIC_API_URL` is inlined into the browser bundle at build time, so it has to be passed as a build argument rather than set at run time. `API_URL`, which only the server reads, is a normal runtime variable.
+
+Migrations run from the compiled DataSource, since the production image has no TypeScript sources or ts-node:
+
+```bash
+docker run --rm -e DATABASE_URL=... pixoo-api:prod npm run migration:run:prod
+```

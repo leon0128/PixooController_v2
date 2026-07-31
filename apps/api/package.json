@@ -18,6 +18,7 @@
     "migration:run": "npm run typeorm -- migration:run",
     "migration:revert": "npm run typeorm -- migration:revert",
     "migration:show": "npm run typeorm -- migration:show",
+    "migration:run:prod": "typeorm -d dist/database/data-source.js migration:run",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",

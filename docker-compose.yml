@@ -21,6 +21,7 @@ services:
   api:
     build:
       context: ./apps/api
+      target: development
     container_name: pixoo-api
     restart: unless-stopped
     environment:
@@ -49,6 +50,7 @@ services:
   web:
     build:
       context: ./apps/web
+      target: development
     container_name: pixoo-web
     restart: unless-stopped
     environment:

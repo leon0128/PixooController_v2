@@ -64,6 +64,8 @@ function toLogBody(command: PixooCommand): string {
 export class PixooDeviceClient {
   private readonly logger = new Logger(PixooDeviceClient.name);
   private readonly deviceTimeoutMs: number;
+  /** The last device discovery returned, kept only for the process lifetime. */
+  private lastKnown: DiscoveredDevice | null = null;
 
   constructor(config: ConfigService) {
     this.deviceTimeoutMs = Number(
@@ -74,6 +76,13 @@ export class PixooDeviceClient {
   /**
    * Asks Divoom which of its devices share this LAN. Nothing about the device is
    * persisted, so this runs immediately before every push.
+   *
+   * Divoom's service has been observed answering `ReturnCode: 0` with an empty list
+   * while the device itself was answering on the LAN in under 100 ms, which would
+   * otherwise leave a perfectly healthy device uncontrollable. The last device it
+   * did return is therefore kept in memory and used when a later lookup comes back
+   * empty. It is only a process-lifetime cache — a restart starts over — so the
+   * address is still never persisted.
    */
   async discover(): Promise<DiscoveredDevice> {
     let payload: { ReturnCode?: number; ReturnMessage?: string; DeviceList?: DiscoveredDevice[] };
@@ -90,26 +99,37 @@ export class PixooDeviceClient {
       }
       payload = await response.json();
     } catch (error) {
-      throw new ServiceUnavailableException(
-        `Device discovery failed: ${(error as Error).message}`,
-      );
+      return this.fallbackTo(`discovery failed: ${(error as Error).message}`);
     }
 
     this.logger.debug(`FindDevice <- ${JSON.stringify(payload)}`);
 
     if (payload.ReturnCode !== 0) {
-      throw new ServiceUnavailableException(
-        `Device discovery returned code ${payload.ReturnCode}: ${payload.ReturnMessage ?? ''}`,
+      return this.fallbackTo(
+        `discovery returned code ${payload.ReturnCode}: ${payload.ReturnMessage ?? ''}`,
       );
     }
 
     const device = payload.DeviceList?.[0];
     if (!device?.DevicePrivateIP) {
-      throw new ServiceUnavailableException('No Pixoo device found on this network');
+      return this.fallbackTo('discovery found no device on this network');
     }
 
+    this.lastKnown = device;
     this.logger.log(`Found ${device.DeviceName} at ${device.DevicePrivateIP}`);
     return device;
+  }
+
+  /** Uses the last device discovery returned, or gives up if there has not been one. */
+  private fallbackTo(reason: string): DiscoveredDevice {
+    if (!this.lastKnown) {
+      throw new ServiceUnavailableException(`No Pixoo device available: ${reason}`);
+    }
+
+    this.logger.warn(
+      `${reason}; falling back to the last known address ${this.lastKnown.DevicePrivateIP}`,
+    );
+    return this.lastKnown;
   }
 
   /**
