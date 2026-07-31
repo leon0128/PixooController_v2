@@ -32,8 +32,9 @@ Everything runs in containers.
 
 ```
 .
-├── docker-compose.yml     # web / api / db
-├── .env.example           # compose settings (ports, credentials, device tuning)
+├── docker-compose.yml      # development: bind mounts and hot reload
+├── docker-compose.prod.yml # production: built images, no source mounted
+├── .env.example            # ports, credentials, device tuning
 └── apps/
     ├── web/               # Next.js + shadcn/ui
     │   ├── src/app/       # routes: /scenes, /scenes/[id], /schedules
@@ -370,6 +371,8 @@ All three services run in development mode with hot reload, and `apps/web` and `
 docker compose up -d --build --renew-anon-volumes api
 ```
 
+The same applies if the container ever starts complaining that `nest` or `next` is not found: the volume is holding an install that no longer matches the image, and renewing it is the fix.
+
 ### Database migrations
 
 TypeORM runs with `synchronize: false`, so the schema only ever changes through migrations. Run them inside the container, where `DATABASE_URL` already points at `db`:
@@ -409,7 +412,7 @@ The `api` container reaches both `app.divoom-gz.com` (for `FindDevice`) and the 
 
 ### Production images
 
-`docker compose` builds the `development` stage, which bind-mounts the source and reloads on change. Each Dockerfile also has a `production` stage, which is the default target:
+`docker compose` builds the `development` stage, which bind-mounts the source and reloads on change. Each Dockerfile also has a `production` stage, which is the default target. `docker-compose.prod.yml` runs it, under its own project name and image tags so that building one stack never overwrites the other's images:
 
 ```bash
 docker build -t pixoo-api:prod ./apps/api
@@ -425,3 +428,106 @@ Migrations run from the compiled DataSource, since the production image has no T
 ```bash
 docker run --rm -e DATABASE_URL=... pixoo-api:prod npm run migration:run:prod
 ```
+
+## Deploying to a Raspberry Pi
+
+The Pi has to be on the same LAN as the Pixoo64 — the app talks to the device directly at its private address.
+
+### Requirements
+
+A 64-bit OS. Check with `uname -m`: `aarch64` is fine, `armv7l` is a 32-bit install and the images here will not run on it.
+
+```bash
+sudo apt update && sudo apt install -y docker.io docker-compose-plugin git
+sudo usermod -aG docker $USER   # log out and back in for this to take effect
+```
+
+### Memory
+
+Building is far heavier than running. Measured peaks, per step:
+
+| Step | Peak RSS |
+| --- | --- |
+| `npm ci` (web) | 523 MB |
+| `next build` | 720 MB |
+| `npm ci` (api) | 427 MB |
+| `nest build` | 336 MB |
+
+Running the finished stack is not:
+
+| Container | Memory |
+| --- | --- |
+| `pixoo-db` | 24 MB |
+| `pixoo-api` | 49 MB |
+| `pixoo-web` | 44 MB |
+
+So a 1 GB Pi runs this comfortably but **cannot build it** on RAM alone — `next build` alone wants 720 MB on top of the OS. Give it swap first:
+
+```bash
+sudo dphys-swapfile swapoff
+sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile
+sudo dphys-swapfile setup && sudo dphys-swapfile swapon
+free -h    # confirm ~2 GB of swap
+```
+
+Swap on an SD card is slow, and the build will take considerably longer than on a desktop. If it still fails, build the images on a faster arm64 machine and copy them over:
+
+```bash
+# on the build machine
+docker build -t pixoo-api:prod ./apps/api
+docker build -t pixoo-web:prod ./apps/web --build-arg NEXT_PUBLIC_API_URL=http://<pi-address>:3001/api
+docker save pixoo-api:prod pixoo-web:prod | gzip > pixoo.tar.gz
+scp pixoo.tar.gz pi@<pi-address>:~
+
+# on the Pi
+gunzip -c pixoo.tar.gz | docker load
+```
+
+### Deploying
+
+```bash
+git clone <repository-url> pixoo-controller
+cd pixoo-controller
+cp .env.example .env
+```
+
+Edit `.env` before building. `PIXOO_HOST` is the one that matters: it is **compiled into the frontend**, so it has to be the address you will actually open the app at, and changing it later means rebuilding the web image.
+
+```bash
+PIXOO_HOST=192.168.0.50      # the Pi's IP or hostname, not localhost
+POSTGRES_PASSWORD=<something other than the default>
+TZ=Asia/Tokyo
+```
+
+Then build, start, and create the schema:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec api npm run migration:run:prod
+```
+
+Open `http://<pi-address>:3000`. The stack restarts with the Pi as long as Docker starts at boot:
+
+```bash
+sudo systemctl enable docker
+```
+
+### Updating
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec api npm run migration:run:prod
+```
+
+Migrations are additive and the database lives in a named volume, so data survives a rebuild. `docker compose -f docker-compose.prod.yml down` stops the stack without touching it; only `down -v` deletes it.
+
+### Checking on it
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f api
+```
+
+The API logs every device request at `debug` level, so the log shows exactly what was sent and what came back. If the display stops updating, that is the first place to look.
+
