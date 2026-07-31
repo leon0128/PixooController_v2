@@ -196,6 +196,7 @@ Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/s
 | `GET` | `/api/scenes/:id` | One scene with its elements and image frames |
 | `POST` | `/api/scenes` | Create a scene together with its elements and image frames |
 | `PUT` | `/api/scenes/:id` | Replace a scene wholesale; elements and frames absent from the body are deleted |
+| `POST` | `/api/scenes/:id/copy` | Duplicate a scene as "&lt;name&gt; - Copy" |
 | `DELETE` | `/api/scenes/:id` | Delete a scene and everything referencing it |
 | `POST` | `/api/scenes/:id/push` | Play a stored scene on the device now |
 | `POST` | `/api/scenes/preview` | Render ad-hoc scene content on the device without saving it |
@@ -203,7 +204,7 @@ Every route is served under the `/api` prefix, e.g. `http://localhost:3001/api/s
 | `GET` | `/api/schedules` | Every scene start marker, ordered by day then slot |
 | `PUT` | `/api/schedules` | Replace the entire weekly schedule |
 
-A scene and everything it owns is always written and read as one aggregate, in a single transaction.
+A scene and everything it owns is always written and read as one aggregate, in a single transaction. Copying goes through the same create path rather than duplicating rows directly, so the copy gets its own image, frames and elements — editing or deleting either side leaves the other alone.
 
 ## Web UI
 
