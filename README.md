@@ -216,6 +216,19 @@ A scene and everything it owns is always written and read as one aggregate, in a
 
 Reads happen in server components and go over the compose network; the browser only talks to the API for writes, previews and pushes. The API client picks `API_URL` when it runs on the server and falls back to `NEXT_PUBLIC_API_URL` in the browser.
 
+### App icon
+
+The icon — a Pixoo grid lighting up a `P` — identifies the tab, a bookmark, and the header beside the app name.
+
+| File | Serves |
+| --- | --- |
+| `src/app/favicon.ico` | the fixed `/favicon.ico` a browser asks for regardless of markup; holds 16, 32 and 48 px frames |
+| `public/icon-32.png`, `public/icon-192.png` | `<link rel="icon">`; the 192 is what keeps a tab or bookmark sharp on a high-DPI screen |
+| `public/icon-180.png` | `apple-touch-icon`, for an iOS home screen |
+| `public/icon-512.png` | the web manifest, alongside the 192 |
+
+`src/app/manifest.ts` makes the app installable, which is what gives a phone something to put on its home screen. Its icons come from `public/` rather than Next's `app/icon` convention, whose URLs are content-hashed and so cannot be named in a manifest.
+
 Uploaded images are converted to `PicData` in the browser — decoded onto a canvas, stripped of the alpha channel and Base64-encoded — so the API only ever sees the exact string it forwards to the device. Anything that is not exactly 64x64 is rejected rather than rescaled, which would wreck pixel art.
 
 An element's font is a numeric id the device understands. `/api/fonts` proxies Divoom's catalogue (`https://appin.divoom-gz.com/Device/GetTimeDialFont`) so the editor can describe each one instead of asking for a bare number, and caches the result for an hour since the catalogue does not change.

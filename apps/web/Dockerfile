@@ -45,9 +45,14 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # `output: 'standalone'` bundles the server and just the dependencies it uses.
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+
+# next/image writes optimized variants under .next/cache, which the copies above
+# do not create. Without it the server runs unprivileged into an EACCES on every
+# image request — served anyway, but re-encoded each time and logged as an error.
+RUN mkdir -p .next/cache && chown -R node:node .next
 
 USER node
 
