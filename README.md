@@ -32,9 +32,11 @@ Everything runs in containers.
 
 ```
 .
-├── docker-compose.yml      # development: bind mounts and hot reload
-├── docker-compose.prod.yml # production: built images, no source mounted
-├── .env.example            # ports, credentials, device tuning
+├── docker-compose.yml        # development: bind mounts and hot reload
+├── docker-compose.prod.yml   # production: builds and runs on the same machine
+├── docker-compose.deploy.yml # runs prebuilt images; what the Pi gets
+├── scripts/deploy.sh         # build here, run there
+├── .env.example              # ports, credentials, device tuning
 └── apps/
     ├── web/               # Next.js + shadcn/ui
     │   ├── src/app/       # routes: /scenes, /scenes/[id], /schedules
@@ -267,7 +269,9 @@ A 60-frame background makes that request about 1 MB, so the API raises its own J
 
 ### Request interval
 
-The device answers a request before it has finished applying it. Send the text too soon after an animation and the display can end up showing only the animation, as if the text were overwritten once playback started. `PIXOO_REQUEST_INTERVAL_MS` (default 500) is the pause left between consecutive device requests; `0` disables it.
+The device answers a request before it has finished applying it. Send the text too soon after an animation and the display ends up showing only the animation, as if the text were overwritten once playback started. `PIXOO_REQUEST_INTERVAL_MS` (default 2000) is the pause left between consecutive device requests; `0` disables it.
+
+How long is long enough depends on the machine doing the sending, which is worth knowing before assuming a value is safe. 500 ms was reliable from a desktop; the same scenes lost their text again once the app moved to a Raspberry Pi, and stayed correct at 2000 ms. The default is the value that held up on the slower of the two, and pushes are rare enough — at most one per 10-minute slot — that the extra few seconds cost nothing. If the display is correct and a manual push feels sluggish, lower it.
 
 Two related settings come from measuring the real device:
 
@@ -437,9 +441,20 @@ The Pi has to be on the same LAN as the Pixoo64 — the app talks to the device 
 
 A 64-bit OS. Check with `uname -m`: `aarch64` is fine, `armv7l` is a 32-bit install and the images here will not run on it.
 
+Docker comes from Docker's own repository, not Debian's. `docker-compose-plugin` in particular does **not** exist in the Raspberry Pi OS or Debian archives — `apt install docker-compose-plugin` there fails with "Unable to locate package". The official script sets the repository up and installs the engine, the Compose plugin and Buildx together:
+
 ```bash
-sudo apt update && sudo apt install -y docker.io docker-compose-plugin git
-sudo usermod -aG docker $USER   # log out and back in for this to take effect
+sudo apt remove -y docker.io docker-compose   # only if Debian's packages are installed
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+sudo apt install -y git
+```
+
+Log out and back in for the group change to apply, then confirm Compose v2 is there — this project uses `docker compose` (a subcommand), not the older standalone `docker-compose`:
+
+```bash
+docker compose version
 ```
 
 ### Memory
@@ -470,7 +485,16 @@ sudo dphys-swapfile setup && sudo dphys-swapfile swapon
 free -h    # confirm ~2 GB of swap
 ```
 
-Swap on an SD card is slow, and the build will take considerably longer than on a desktop. If it still fails, build the images on a faster arm64 machine and copy them over:
+Swap on an SD card is slow, and the build will take considerably longer than on a desktop — `npm ci` alone runs for ten to fifteen minutes per app. An install that long is exposed to any brief network hiccup, which surfaces as:
+
+```
+npm error code ECONNRESET
+npm error network request to https://registry.npmjs.org/... failed
+```
+
+That is a dropped connection, not a broken build. Run the same command again: BuildKit keeps the layers that already succeeded, and the npm cache is mounted across builds so nothing already downloaded is fetched twice. The images also raise npm's retry counts and timeouts, which makes it far less likely in the first place.
+
+If it still fails, build the images on a faster arm64 machine and copy them over:
 
 ```bash
 # on the build machine
@@ -484,6 +508,50 @@ gunzip -c pixoo.tar.gz | docker load
 ```
 
 ### Deploying
+
+Build on a development machine and hand the Pi finished images. Building on the Pi
+itself works but takes about ninety minutes, most of it `npm ci` and `next build`
+grinding through swap on an SD card; the same build on a desktop takes seconds.
+
+```bash
+./scripts/deploy.sh pi@192.168.0.201
+```
+
+That builds both images for `linux/arm64`, copies `docker-compose.deploy.yml` and
+an `.env` over, streams the images across, starts everything and applies
+migrations. Measured here: **10 s** to rebuild after a source change, **92 MB**
+compressed to transfer.
+
+The Pi needs Docker and nothing else — no source checkout, no Node, no toolchain.
+`docker-compose.deploy.yml` has no `build:` section at all, so `up` there can never
+start a build.
+
+If the Pi answers to a different name than the one you SSH to, set the address the
+browser will use — it is compiled into the frontend:
+
+```bash
+PIXOO_HOST=pixoo.local ./scripts/deploy.sh pi@192.168.0.201
+```
+
+Afterwards, on the Pi:
+
+```bash
+cd pixoo-controller
+docker compose ps
+docker compose logs -f api
+```
+
+Review the generated `.env` before this reaches anything real — it starts from
+`.env.example`, default database password and all. The script never overwrites an
+`.env` that already exists.
+
+The stack restarts with the Pi as long as Docker starts at boot:
+
+```bash
+sudo systemctl enable docker
+```
+
+### Building on the Pi instead
 
 ```bash
 git clone <repository-url> pixoo-controller
@@ -514,13 +582,20 @@ sudo systemctl enable docker
 
 ### Updating
 
+The same command again — it rebuilds, transfers and migrates:
+
 ```bash
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml exec api npm run migration:run:prod
+./scripts/deploy.sh pi@192.168.0.201
 ```
 
-Migrations are additive and the database lives in a named volume, so data survives a rebuild. `docker compose -f docker-compose.prod.yml down` stops the stack without touching it; only `down -v` deletes it.
+Migrations are additive and the database lives in a named volume, so data survives
+a redeploy. On the Pi, `docker compose down` stops the stack without touching it;
+only `down -v` deletes it.
+
+`docker save` exports whole images rather than just what changed, so every deploy
+moves the same ~92 MB. That is a minute or so over a LAN. If it starts to grate,
+push to a registry instead — `docker load` and a registry pull both deduplicate
+layers, but only the registry avoids sending them.
 
 ### Checking on it
 

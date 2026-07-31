@@ -1,14 +1,20 @@
-# Production stack, intended for a Raspberry Pi on the same LAN as the Pixoo64.
+# Run-only stack for the Raspberry Pi. Images are built elsewhere and loaded in,
+# so the Pi needs neither the source nor a toolchain — building on it takes about
+# an hour and a half, against a couple of minutes on a desktop.
 #
-# Differs from docker-compose.yml in three ways that matter on a small machine:
-# it builds the `production` stage, mounts no source, and runs no file watchers —
-# the development stack keeps a TypeScript watcher and a Next.js dev server alive,
-# which is far more memory than a 1 GB Pi has to spare.
+# Deploy with scripts/deploy.sh from a development machine. To operate it on the
+# Pi afterwards:
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose up -d          # start (or restart after loading new images)
+#   docker compose logs -f api    # follow the device requests
+#   docker compose down           # stop, keeping the database
 #
-# Its own project name and image tags keep it from colliding with the development
-# stack, which would otherwise share both and overwrite them on each build.
+# There is deliberately no `build:` section: `up` can never start a build here.
+#
+# Shares its project name with docker-compose.prod.yml on purpose: the two describe
+# the same production stack, differing only in whether the images are built here or
+# brought in. Deploying therefore replaces a stack started from the other file and
+# keeps its database, instead of colliding with it over the container names.
 name: pixoo-prod
 
 services:
@@ -20,7 +26,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-pixoo}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pixoo}
       POSTGRES_DB: ${POSTGRES_DB:-pixoo}
-    # Not published: only the api talks to it, over the compose network.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -31,9 +36,6 @@ services:
       retries: 10
 
   api:
-    build:
-      context: ./apps/api
-      target: production
     image: pixoo-api:prod
     container_name: pixoo-api
     restart: unless-stopped
@@ -41,7 +43,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pixoo}:${POSTGRES_PASSWORD:-pixoo}@db:5432/${POSTGRES_DB:-pixoo}
       PORT: 3001
       WEB_ORIGIN: http://${PIXOO_HOST:-localhost}:${WEB_PORT:-3000}
-      # Weekdays and 10-minute slots are wall-clock local time.
       TZ: ${TZ:-Asia/Tokyo}
       PIXOO_REQUEST_INTERVAL_MS: ${PIXOO_REQUEST_INTERVAL_MS:-2000}
       PIXOO_REQUEST_TIMEOUT_MS: ${PIXOO_REQUEST_TIMEOUT_MS:-30000}
@@ -52,19 +53,12 @@ services:
         condition: service_healthy
 
   web:
-    build:
-      context: ./apps/web
-      target: production
-      args:
-        # Read by the browser, so it must be an address the browser can reach —
-        # the Pi's, not the container's. Inlined at build time, which is why it is
-        # a build argument rather than an environment variable.
-        NEXT_PUBLIC_API_URL: http://${PIXOO_HOST:-localhost}:${API_PORT:-3001}/api
+    # PIXOO_HOST is compiled into this image rather than read from the environment,
+    # so changing it means rebuilding and redeploying, not just restarting.
     image: pixoo-web:prod
     container_name: pixoo-web
     restart: unless-stopped
     environment:
-      # Read by Next.js server components, which resolve over the compose network.
       API_URL: http://api:3001/api
       TZ: ${TZ:-Asia/Tokyo}
     ports:

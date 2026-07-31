@@ -9,11 +9,16 @@ import type { PixooSceneInput } from './pixoo.types';
  * Pause between consecutive requests to the device, in milliseconds.
  *
  * The device does not finish applying a request by the time it answers: sending the
- * text immediately after an animation has been observed to leave only the animation
- * on screen, as if the text were overwritten once playback started. Tune this with
- * PIXOO_REQUEST_INTERVAL_MS to find what this device needs.
+ * text too soon after an animation leaves only the animation on screen, as if the
+ * text were overwritten once playback started.
+ *
+ * How long is long enough depends on the machine doing the sending. 500 ms was
+ * reliable from a desktop but not from a Raspberry Pi, where the same scene lost
+ * its text again until the gap was raised to 2000 ms. The default is therefore the
+ * value that held up on the slower of the two. Lower it with
+ * PIXOO_REQUEST_INTERVAL_MS if pushes feel sluggish and the display stays correct.
  */
-const DEFAULT_REQUEST_INTERVAL_MS = 500;
+const DEFAULT_REQUEST_INTERVAL_MS = 2000;
 
 @Injectable()
 export class PixooService {

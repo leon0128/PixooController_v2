@@ -33,7 +33,7 @@ services:
       TZ: ${TZ:-Asia/Tokyo}
       # Pause between consecutive requests to the device. Raise it if the display
       # drops a layer (for example text vanishing behind an animation).
-      PIXOO_REQUEST_INTERVAL_MS: ${PIXOO_REQUEST_INTERVAL_MS:-500}
+      PIXOO_REQUEST_INTERVAL_MS: ${PIXOO_REQUEST_INTERVAL_MS:-2000}
       # How long to wait for the device to answer. It processes a request before
       # replying, and a 60-frame background takes it about six seconds.
       PIXOO_REQUEST_TIMEOUT_MS: ${PIXOO_REQUEST_TIMEOUT_MS:-30000}
