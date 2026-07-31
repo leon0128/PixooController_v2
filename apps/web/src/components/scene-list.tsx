@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Loader2, Monitor, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Copy, Loader2, Monitor, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,19 @@ import { FrameThumbnail } from '@/components/frame-thumbnail';
 import { ApiError, api } from '@/lib/api';
 import { SCENE_ELEMENT_LABELS, type Scene } from '@/lib/api-types';
 
+/**
+ * The frame the scene is listed by. Falls back to the first if the stored index no
+ * longer lines up with the frames, so a listing never comes out blank.
+ */
+function thumbnailOf(scene: Scene): string | undefined {
+  const details = scene.image?.details;
+  if (!details?.length) return undefined;
+  const byIndex = details.find(
+    (detail) => detail.frameIndex === scene.image!.thumbnailFrameIndex,
+  );
+  return (byIndex ?? details[0]).imageData;
+}
+
 export function SceneList({ scenes }: { scenes: Scene[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -31,6 +44,19 @@ export function SceneList({ scenes }: { scenes: Scene[] }) {
     try {
       await api.pushScene(scene.id);
       toast.success(`Showing "${scene.name}" on the device`);
+    } catch (cause) {
+      toast.error(cause instanceof ApiError ? cause.message : String(cause));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function copy(scene: Scene) {
+    setBusyId(scene.id);
+    try {
+      const created = await api.copyScene(scene.id);
+      toast.success(`Copied to "${created.name}"`);
+      router.refresh();
     } catch (cause) {
       toast.error(cause instanceof ApiError ? cause.message : String(cause));
     } finally {
@@ -79,9 +105,9 @@ export function SceneList({ scenes }: { scenes: Scene[] }) {
         {scenes.map((scene) => (
           <Card key={scene.id}>
             <CardContent className="flex items-center gap-4 py-4">
-              {scene.image?.details[0] ? (
+              {thumbnailOf(scene) ? (
                 <FrameThumbnail
-                  picData={scene.image.details[0].imageData}
+                  picData={thumbnailOf(scene)!}
                   className="size-16 shrink-0"
                 />
               ) : (
@@ -131,6 +157,15 @@ export function SceneList({ scenes }: { scenes: Scene[] }) {
                   render={<Link href={`/scenes/${scene.id}`} />}
                 >
                   <Pencil className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Copy"
+                  disabled={busyId === scene.id}
+                  onClick={() => void copy(scene)}
+                >
+                  <Copy className="size-4" />
                 </Button>
                 <Button
                   variant="ghost"

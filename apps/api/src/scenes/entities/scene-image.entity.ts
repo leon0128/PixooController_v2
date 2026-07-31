@@ -28,6 +28,13 @@ export class SceneImage {
   @Column({ type: 'int' })
   picSpeed: number;
 
+  /**
+   * Which frame stands in for the scene in listings. Never sent to the device —
+   * the first frame is rarely the one that identifies an animation.
+   */
+  @Column({ type: 'int', default: 0 })
+  thumbnailFrameIndex: number;
+
   @OneToMany(() => SceneImageDetail, (detail) => detail.sceneImage, {
     cascade: true,
   })

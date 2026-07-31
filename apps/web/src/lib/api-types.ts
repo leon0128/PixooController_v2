@@ -121,6 +121,8 @@ export interface SceneImageDetail {
 export interface SceneImage {
   id: number;
   picSpeed: number;
+  /** Which frame stands in for the scene in listings. */
+  thumbnailFrameIndex: number;
   details: SceneImageDetail[];
 }
 
@@ -135,7 +137,7 @@ export interface Scene {
 
 /** Request shape for creating or replacing a scene. */
 export interface SceneContentPayload {
-  image: { picSpeed: number; frames: string[] } | null;
+  image: { picSpeed: number; thumbnailFrameIndex: number; frames: string[] } | null;
   elements: Omit<SceneElement, 'id'>[];
 }
 

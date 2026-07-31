@@ -3,7 +3,17 @@
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useCallback, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, Monitor, Plus, Save, Trash2, Upload, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Loader2,
+  Monitor,
+  Plus,
+  Save,
+  Star,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -109,6 +119,9 @@ export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[
   );
   const [selected, setSelected] = useState<number | null>(null);
   const [previewFrame, setPreviewFrame] = useState(0);
+  const [thumbnailFrame, setThumbnailFrame] = useState(
+    scene?.image?.thumbnailFrameIndex ?? 0,
+  );
 
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -116,12 +129,16 @@ export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[
   // Clamped during render rather than corrected in an effect, so removing frames
   // never leaves a dangling index even for one paint.
   const activeFrame = Math.min(previewFrame, Math.max(frames.length - 1, 0));
+  const activeThumbnail = Math.min(thumbnailFrame, Math.max(frames.length - 1, 0));
 
   const buildPayload = useCallback((): SaveScenePayload => ({
     name: name.trim(),
-    image: frames.length > 0 ? { picSpeed, frames } : null,
+    image:
+      frames.length > 0
+        ? { picSpeed, thumbnailFrameIndex: activeThumbnail, frames }
+        : null,
     elements,
-  }), [name, frames, picSpeed, elements]);
+  }), [name, frames, picSpeed, activeThumbnail, elements]);
 
   async function addFiles(files: FileList | null) {
     if (!files?.length) return;
@@ -222,11 +239,15 @@ export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[
             selectedIndex={selected}
           />
           {frames.length > 1 && (
-            <div className="flex flex-wrap items-center gap-1">
+            // A fixed eight columns rather than flex-wrap: the preview sits in an
+            // auto-sized grid column, and a row of buttons free to grow sideways
+            // widens it and squeezes the form beside it.
+            <div className="grid grid-cols-8 gap-1">
               {frames.map((_, index) => (
                 <Button
                   key={index}
                   size="xs"
+                  className="px-0"
                   variant={index === activeFrame ? 'default' : 'outline'}
                   onClick={() => setPreviewFrame(index)}
                 >
@@ -310,6 +331,30 @@ export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[
                         </span>
                         <button
                           type="button"
+                          aria-label={
+                            index === activeThumbnail
+                              ? `Frame ${index + 1} is the thumbnail`
+                              : `Use frame ${index + 1} as the thumbnail`
+                          }
+                          aria-pressed={index === activeThumbnail}
+                          title="Use as thumbnail"
+                          className={cn(
+                            'bg-background/80 absolute right-0 bottom-0 rounded-tl px-1 transition-opacity',
+                            index === activeThumbnail
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-100',
+                          )}
+                          onClick={() => setThumbnailFrame(index)}
+                        >
+                          <Star
+                            className={cn(
+                              'size-3',
+                              index === activeThumbnail && 'fill-current',
+                            )}
+                          />
+                        </button>
+                        <button
+                          type="button"
                           aria-label={`Remove frame ${index + 1}`}
                           className="bg-background absolute -top-1.5 -right-1.5 rounded-full border p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
                           onClick={() =>
@@ -321,6 +366,11 @@ export function SceneEditor({ scene, fonts }: { scene?: Scene; fonts: PixooFont[
                       </div>
                     ))}
                   </div>
+
+                  <p className="text-muted-foreground text-xs">
+                    The starred frame represents this scene in the list; hover a frame
+                    to change it.
+                  </p>
 
                   <div className="space-y-1.5">
                     <Label htmlFor="pic-speed">Loop interval (ms)</Label>

@@ -12,8 +12,12 @@ import {
   Max,
   MaxLength,
   Min,
+  Validate,
   ValidateIf,
   ValidateNested,
+  ValidatorConstraint,
+  type ValidationArguments,
+  type ValidatorConstraintInterface,
 } from 'class-validator';
 import { IsPicData } from '../../common/validators/is-pic-data.validator';
 import {
@@ -27,6 +31,20 @@ import type { SceneElementType } from '../entities/scene-element.entity';
 
 const bearsText = (element: SceneElementDto) =>
   TEXT_BEARING_TYPES.includes(element.type);
+
+/** Keeps the thumbnail pointing at a frame the image actually has. */
+@ValidatorConstraint({ name: 'isExistingFrameIndex' })
+class IsExistingFrameIndex implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    const { frames } = args.object as SceneImageDto;
+    return typeof value !== 'number' || (Array.isArray(frames) && value < frames.length);
+  }
+
+  defaultMessage(args: ValidationArguments): string {
+    const { frames } = args.object as SceneImageDto;
+    return `thumbnailFrameIndex must be below the frame count (${frames?.length ?? 0})`;
+  }
+}
 
 export class SceneElementDto {
   @IsIn(SCENE_ELEMENT_TYPES)
@@ -93,6 +111,16 @@ export class SceneImageDto {
   @IsInt()
   @Min(0)
   picSpeed: number;
+
+  /**
+   * Which frame represents the scene in listings. Defaults to the first, and has to
+   * point at a frame that exists — a stale index would leave the listing blank.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Validate(IsExistingFrameIndex)
+  thumbnailFrameIndex?: number;
 
   /**
    * Frames in loop order — the array index becomes the stored frame_index, so the

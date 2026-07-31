@@ -69,6 +69,8 @@ export const api = {
     request<Scene>('/scenes', { method: 'POST', body }),
   replaceScene: (id: number, body: SaveScenePayload) =>
     request<Scene>(`/scenes/${id}`, { method: 'PUT', body }),
+  copyScene: (id: number) =>
+    request<Scene>(`/scenes/${id}/copy`, { method: 'POST' }),
   deleteScene: (id: number) =>
     request<null>(`/scenes/${id}`, { method: 'DELETE' }),
   pushScene: (id: number) =>

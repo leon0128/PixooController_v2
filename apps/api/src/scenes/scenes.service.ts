@@ -7,6 +7,12 @@ import { SceneImage } from './entities/scene-image.entity';
 import { SceneImageDetail } from './entities/scene-image-detail.entity';
 import { Scene } from './entities/scene.entity';
 
+const COPY_SUFFIX = ' - Copy';
+/** Names are capped at 255, so a long one loses its tail rather than the suffix. */
+function copyNameFor(name: string): string {
+  return name.slice(0, 255 - COPY_SUFFIX.length) + COPY_SUFFIX;
+}
+
 /** Relations that make up the scene aggregate, always loaded and saved together. */
 const SCENE_RELATIONS = ['image', 'image.details', 'elements'] as const;
 
@@ -40,6 +46,45 @@ export class ScenesService {
       return scene.id;
     });
     return this.findOne(id);
+  }
+
+  /**
+   * Duplicates a scene under a "<name> - Copy" title.
+   *
+   * Goes through `create` rather than copying rows directly, so the duplicate is
+   * written exactly like any other new scene: its image, frames and elements are
+   * fresh rows of its own. Nothing is shared with the original, and editing either
+   * one leaves the other alone.
+   */
+  async copy(id: number): Promise<Scene> {
+    const source = await this.findOne(id);
+
+    return this.create({
+      name: copyNameFor(source.name),
+      image: source.image
+        ? {
+            picSpeed: source.image.picSpeed,
+            thumbnailFrameIndex: source.image.thumbnailFrameIndex,
+            frames: [...(source.image.details ?? [])]
+              .sort((a, b) => a.frameIndex - b.frameIndex)
+              .map((detail) => detail.imageData),
+          }
+        : null,
+      elements: (source.elements ?? []).map((element) => ({
+        type: element.type,
+        text: element.text,
+        x: element.x,
+        y: element.y,
+        dir: element.dir,
+        font: element.font,
+        textWidth: element.textWidth,
+        textHeight: element.textHeight,
+        speed: element.speed,
+        color: element.color,
+        updateTime: element.updateTime,
+        align: element.align,
+      })),
+    });
   }
 
   /**
@@ -93,7 +138,11 @@ export class ScenesService {
       .save(
         manager
           .getRepository(SceneImage)
-          .create({ sceneId, picSpeed: dto.image.picSpeed }),
+          .create({
+            sceneId,
+            picSpeed: dto.image.picSpeed,
+            thumbnailFrameIndex: dto.image.thumbnailFrameIndex ?? 0,
+          }),
       );
 
     await manager.getRepository(SceneImageDetail).insert(

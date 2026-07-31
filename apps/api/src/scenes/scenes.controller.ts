@@ -64,6 +64,12 @@ export class ScenesController {
     return this.scenesService.remove(id);
   }
 
+  /** Duplicates a scene, including its image and elements, under a new name. */
+  @Post(':id/copy')
+  copy(@Param('id', ParseIntPipe) id: number): Promise<Scene> {
+    return this.scenesService.copy(id);
+  }
+
   /** Plays a stored scene on the device straight away. */
   @Post(':id/push')
   @HttpCode(HttpStatus.NO_CONTENT)
