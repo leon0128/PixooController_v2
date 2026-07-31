@@ -269,6 +269,11 @@ A 60-frame background makes that request about 1 MB, so the API raises its own J
 
 The device answers a request before it has finished applying it. Send the text too soon after an animation and the display can end up showing only the animation, as if the text were overwritten once playback started. `PIXOO_REQUEST_INTERVAL_MS` (default 500) is the pause left between consecutive device requests; `0` disables it.
 
+Two related settings come from measuring the real device:
+
+- `PIXOO_REQUEST_TIMEOUT_MS` (default 30000) — how long to wait for an answer. The device works through a request before replying, and that scales with the payload: 10 frames take about 1.3 s, 30 frames 3.5 s, and 60 frames 6.1 s. A 5-second timeout would fail every scene past roughly 48 frames.
+- Each command is attempted up to three times, two seconds apart. After accepting a large animation the device goes unresponsive for several seconds while it renders, and no fixed delay reliably avoids that window — a 0 ms gap succeeded where 500 ms and 1500 ms timed out. Retrying is safe because every command sets state rather than accumulating it. A non-zero `error_code` is a real rejection and is never retried.
+
 ```bash
 PIXOO_REQUEST_INTERVAL_MS=1000 docker compose up -d api
 ```
@@ -322,7 +327,9 @@ Background frames travel as Base64 of a raw 64x64 RGB buffer — exactly the `Pi
   - [x] Scene list, with per-scene push to the device
   - [x] Scene editor: image frames, elements, and a magnified 64x64 placement preview
   - [x] Schedule screen: a weekday x 10-minute grid, edited through a dialog
-- [ ] **Phase 7: Integration testing & real-device verification**
+- [x] **Phase 7: Integration testing & real-device verification**
+  - [x] End-to-end scenario, error handling, boundaries and a clean-environment rebuild
+  - [x] Scheduler auto-push verified against the real device
 - [ ] **Phase 8: Wrap-up**
 
 ## Setup
@@ -339,8 +346,11 @@ brew install --cask docker
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up -d --build
+docker compose exec api npm run migration:run
 ```
+
+The migration step is required on a fresh database — the app does not create its own schema, so without it every page fails with a 500 until the tables exist.
 
 | Service | URL |
 | --- | --- |

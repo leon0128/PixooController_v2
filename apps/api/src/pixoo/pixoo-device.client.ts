@@ -4,12 +4,26 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { DiscoveredDevice, PixooCommand, PixooFont } from './pixoo.types';
 
 const DISCOVERY_URL = 'https://app.divoom-gz.com/Device/ReturnSameLanDevice';
 const FONT_LIST_URL = 'https://appin.divoom-gz.com/Device/GetTimeDialFont';
 const DISCOVERY_TIMEOUT_MS = 10_000;
-const DEVICE_TIMEOUT_MS = 5_000;
+
+/**
+ * How long to wait for the device to answer, in milliseconds.
+ *
+ * The device works through a request before replying, and that scales with the
+ * payload: a 60-frame background is roughly 1 MB and takes it about six seconds.
+ * The default leaves room for that plus a slow network; raise it with
+ * PIXOO_REQUEST_TIMEOUT_MS if a large scene still times out.
+ */
+const DEFAULT_DEVICE_TIMEOUT_MS = 30_000;
+
+/** Attempts per command, and the pause between them. */
+const DEVICE_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 2_000;
 
 /**
  * Parses one entry of GetTimeDialFont, which arrives as a comma-separated string
@@ -49,6 +63,13 @@ function toLogBody(command: PixooCommand): string {
 @Injectable()
 export class PixooDeviceClient {
   private readonly logger = new Logger(PixooDeviceClient.name);
+  private readonly deviceTimeoutMs: number;
+
+  constructor(config: ConfigService) {
+    this.deviceTimeoutMs = Number(
+      config.get('PIXOO_REQUEST_TIMEOUT_MS') ?? DEFAULT_DEVICE_TIMEOUT_MS,
+    );
+  }
 
   /**
    * Asks Divoom which of its devices share this LAN. Nothing about the device is
@@ -135,38 +156,59 @@ export class PixooDeviceClient {
     return fonts;
   }
 
-  /** POSTs one command and fails loudly on a non-zero error_code. */
+  /**
+   * POSTs one command and fails loudly on a non-zero error_code.
+   *
+   * A request that never gets answered is retried. After accepting a large
+   * animation the device goes unresponsive for a few seconds while it renders,
+   * and no fixed delay reliably avoids that window. Retrying is safe because every
+   * command sets state rather than accumulating it — sending one twice is the same
+   * as sending it once. A non-zero error_code is a real rejection and is not
+   * retried.
+   */
   async send(ip: string, command: PixooCommand, step?: string): Promise<void> {
     const url = `http://${ip}:80/post`;
     const body = JSON.stringify(command);
     const label = step ? `[${step}] ` : '';
-    let payload: { error_code?: number };
 
     this.logger.debug(`${label}POST ${url} ${toLogBody(command)}`);
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(DEVICE_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+    let lastError = '';
+    for (let attempt = 1; attempt <= DEVICE_ATTEMPTS; attempt++) {
+      let payload: { error_code?: number };
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(this.deviceTimeoutMs),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        payload = await response.json();
+      } catch (error) {
+        lastError = (error as Error).message;
+        this.logger.warn(
+          `${label}${command.Command} attempt ${attempt}/${DEVICE_ATTEMPTS} failed: ${lastError}`,
+        );
+        if (attempt < DEVICE_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+        continue;
       }
-      payload = await response.json();
-    } catch (error) {
-      throw new BadGatewayException(
-        `${command.Command} failed against ${ip}: ${(error as Error).message}`,
-      );
+
+      this.logger.debug(`${label}${command.Command} <- ${JSON.stringify(payload)}`);
+
+      if (payload.error_code !== 0) {
+        throw new BadGatewayException(
+          `${command.Command} rejected by ${ip} with error_code ${payload.error_code}`,
+        );
+      }
+      return;
     }
 
-    this.logger.debug(`${label}${command.Command} <- ${JSON.stringify(payload)}`);
-
-    if (payload.error_code !== 0) {
-      throw new BadGatewayException(
-        `${command.Command} rejected by ${ip} with error_code ${payload.error_code}`,
-      );
-    }
+    throw new BadGatewayException(
+      `${command.Command} failed against ${ip} after ${DEVICE_ATTEMPTS} attempts: ${lastError}`,
+    );
   }
 }
